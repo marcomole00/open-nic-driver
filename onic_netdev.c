@@ -179,7 +179,7 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
 
 static int onic_xdp_xmit_back(struct onic_rx_queue *q, struct xdp_buff *xdp_buff) {
 	struct onic_private *priv = netdev_priv(q->netdev);
-	struct xdp_frame *xdpf = xdp_convert_buff_to_frame(xdp_buff);
+	struct xdp_frame *xdpf = convert_to_xdp_frame(xdp_buff);
 	struct onic_ring *tx_ring;
 	struct onic_tx_queue *tx_queue;
 	struct netdev_queue *nq;
@@ -361,7 +361,6 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 		/* maximum packet size is 1514, less than the page size */
 		data = (u8 *)(page_address(buf->pg) + buf->offset);
 		xdp.rxq = &q->xdp_rxq;
-	 	xdp.frame_sz = FRAME_SIZE; // i'm not sure this is correct, probably is pkt_len + some headers
 	 	xdp.data = data; // data is the pointer to the data in the page, and its being passed into the sk_buff struct
 	 	xdp.data_end = data + len; // data + len is the pointer to the end of the data in the page, and its being passed into the sk_buff struct
 	 	xdp.data_hard_start = data - XDP_PACKET_HEADROOM; 
@@ -465,7 +464,7 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 	}
 
 	if (xdp_xmit & ONIC_XDP_REDIR)
-		xdp_do_flush();
+		xdp_do_flush_map();
 
 	if (xdp_xmit & XDP_TX) {
 		struct onic_tx_queue *tx_queue = onic_xdp_tx_queue_mapping(priv);
@@ -690,7 +689,7 @@ static int onic_init_rx_queue(struct onic_private *priv, u16 qid)
 	if (xdp_rxq_info_is_reg(&q->xdp_rxq))
 		xdp_rxq_info_unreg(&q->xdp_rxq);
 
-	rv = xdp_rxq_info_reg(&q->xdp_rxq, dev, qid, q->napi.napi_id);
+	rv = xdp_rxq_info_reg(&q->xdp_rxq, dev, qid);
 	if (rv < 0) {
 		netdev_err(dev, "Failed to register xdp_rxq index %u\n", q->qid);
 		return rv;
