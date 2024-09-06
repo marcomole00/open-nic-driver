@@ -215,22 +215,22 @@ static void *onic_run_xdp(struct onic_rx_queue *rx_queue, struct xdp_buff *xdp_b
 
 	switch(act) {
 		case XDP_PASS:
-			printK("XDP_PASS\n");
+			printk("XDP_PASS\n");
 			break;
 		case XDP_TX:
-			printK("XDP_TX\n");
+			printk("XDP_TX\n");
 			break;
 		case XDP_REDIRECT:
-			printK("XDP_REDIRECT\n");
+			printk("XDP_REDIRECT\n");
 			break;
 		case XDP_ABORTED:
-			printK("XDP_ABORTED\n");
+			printk("XDP_ABORTED\n");
 			break;
 		case XDP_DROP:
-			printK("XDP_DROP\n");
+			printk("XDP_DROP\n");
 			break;
 		default:
-			printK("default act:%d\n", act);
+			printk("default act:%d\n", act);
 			break;
 	}
 
