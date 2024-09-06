@@ -384,6 +384,7 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 	 	//xdp.data = xdp.data; // data is the pointer to the data in the page, and its being passed into the sk_buff struct
 	 	xdp.data_end = xdp.data + len; // data + len is the pointer to the end of the data in the page, and its being passed into the sk_buff struct
 	 	xdp.data_hard_start = xdp.data - XDP_PACKET_HEADROOM; 
+		xdp.data_meta = xdp.data; 
 
 		res = onic_run_xdp(q, &xdp,priv);
 		if (IS_ERR(res)) {
