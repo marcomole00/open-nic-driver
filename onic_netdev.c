@@ -206,9 +206,34 @@ static void *onic_run_xdp(struct onic_rx_queue *rx_queue, struct xdp_buff *xdp_b
 
 	xdp_prog = rx_queue->xdp_prog;
 	if (!xdp_prog)
+		printk("xdp_prog is NULL\n");
 		goto out;
 
 	act = bpf_prog_run_xdp(xdp_prog, xdp_buff);
+	
+	//TODO THIS IS A HACK, I NEED TO FIX THIS
+	
+	switch(act) {
+		case XDP_PASS:
+			printK("XDP_PASS\n");
+			break;
+		case XDP_TX:
+			printK("XDP_TX\n");
+			break;
+		case XDP_REDIRECT:
+			printK("XDP_REDIRECT\n");
+			break;
+		case XDP_ABORTED:
+			printK("XDP_ABORTED\n");
+			break;
+		case XDP_DROP:
+			printK("XDP_DROP\n");
+			break;
+		default:
+			printK("default act:%d\n", act);
+			break;
+	}
+
 	switch (act){
 		case XDP_PASS:
 			priv->xdp_stats.xdp_pass++;
