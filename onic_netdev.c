@@ -212,7 +212,7 @@ static void *onic_run_xdp(struct onic_rx_queue *rx_queue, struct xdp_buff *xdp_b
 	act = bpf_prog_run_xdp(xdp_prog, xdp_buff);
 	
 	//TODO THIS IS A HACK, I NEED TO FIX THIS
-	
+
 	switch(act) {
 		case XDP_PASS:
 			printK("XDP_PASS\n");
@@ -703,6 +703,8 @@ static int onic_init_rx_queue(struct onic_private *priv, u16 qid)
 	q->netdev = dev;
 	q->vector = priv->q_vector[vid];
 	q->qid = qid;
+
+	q->xdp_prog = priv->xdp_prog;
 
 	if (xdp_rxq_info_is_reg(&q->xdp_rxq))
 		xdp_rxq_info_unreg(&q->xdp_rxq);
