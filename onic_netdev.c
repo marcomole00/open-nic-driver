@@ -378,12 +378,12 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 		// data is the pointer to the data in the page, and its being passed into the sk_buff struct
 		/* maximum packet size is 1514, less than the page size */
 		data = (u8 *)(page_address(buf->pg) + buf->offset);
+
+		xdp.data = page_address(buf->pg) + buf->offset;
 		xdp.rxq = &q->xdp_rxq;
-	 	xdp.frame_sz = FRAME_SIZE; // i'm not sure this is correct, probably is pkt_len + some headers
-	 	xdp.data = data; // data is the pointer to the data in the page, and its being passed into the sk_buff struct
-	 	xdp.data_end = data + len; // data + len is the pointer to the end of the data in the page, and its being passed into the sk_buff struct
-	 	xdp.data_hard_start = data - XDP_PACKET_HEADROOM; 
-	 	xdp.data_meta = data; // additional packet metadata, none ATM
+	 	xdp.data = xdp.data; // data is the pointer to the data in the page, and its being passed into the sk_buff struct
+	 	xdp.data_end = xdp.data + len; // data + len is the pointer to the end of the data in the page, and its being passed into the sk_buff struct
+	 	xdp.data_hard_start = xdp.data - XDP_PACKET_HEADROOM; 
 
 		res = onic_run_xdp(q, &xdp,priv);
 		if (IS_ERR(res)) {
