@@ -205,9 +205,10 @@ static void *onic_run_xdp(struct onic_rx_queue *rx_queue, struct xdp_buff *xdp_b
 	u32 act;
 
 	xdp_prog = rx_queue->xdp_prog;
-	if (!xdp_prog)
+	if (!xdp_prog){
 		printk("xdp_prog is NULL\n");
 		goto out;
+	}
 
 	act = bpf_prog_run_xdp(xdp_prog, xdp_buff);
 	
