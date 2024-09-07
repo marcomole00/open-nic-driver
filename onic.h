@@ -34,10 +34,10 @@
 #define ONIC_FLAG_MASTER_PF		0
 
 /* XDP */
-#define ONIC_XDP_PASS     BIT(0)
-#define ONIC_XDP_CONSUMED	BIT(0)
-#define ONIC_XDP_TX       BIT(1)
-#define ONIC_XDP_REDIR    BIT(2)
+#define ONIC_XDP_PASS    	BIT(0)	
+#define ONIC_XDP_CONSUMED	BIT(1)
+#define ONIC_XDP_TX       	BIT(2)
+#define ONIC_XDP_REDIR    	BIT(3)
 
 enum onic_tx_buf_type {
 	ONIC_TX_BUF_TYPE_SKB = 0,
