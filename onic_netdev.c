@@ -162,6 +162,8 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
 	// This gets called only if version is >= 5.3.0 since we do not support
 	// TX/REDIR on older versions
 	if (onic_ring_full(ring) || !netdev_xmit_more()) {
+		netdev_info(priv->netdev, "ring full %d, xmit_more %d (if i'm here it should be retransmitting)",
+			    onic_ring_full(ring), netdev_xmit_more());
 		wmb();
 		onic_set_tx_head(priv->hw.qdma, tx_queue->qid, ring->next_to_use);
 	}
