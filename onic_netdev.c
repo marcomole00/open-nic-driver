@@ -208,7 +208,6 @@ static void *onic_run_xdp(struct onic_rx_queue *rx_queue, struct xdp_buff *xdp_b
 
 	xdp_prog = rx_queue->xdp_prog;
 	if (!xdp_prog){
-		printk("xdp_prog is NULL\n");
 		goto out;
 	}
 
@@ -1056,16 +1055,19 @@ int onic_xdp_xmit(struct net_device *dev, int n, struct xdp_frame **frames, u32 
 	int i, drops = 0, cpu = smp_processor_id();
 
 	if (unlikely(test_and_set_bit(0, priv->state))){
+			netdev_err(dev, "Device is not running");
 			priv->xdp_stats.xdp_xmit_err++;
 		return -ENETDOWN;
 	}
 	if (unlikely(flags & ~XDP_XMIT_FLAGS_MASK)){
+			netdev_err(dev, "Invalid flags");
 			priv->xdp_stats.xdp_xmit_err++;
 		return -EINVAL;
 	}
 
 	tx_queue = priv->xdp_prog ? onic_xdp_tx_queue_mapping(priv) : NULL;
 	if (unlikely(!tx_queue)){
+		netdev_err(dev, "No XDP TX queue");
 			priv->xdp_stats.xdp_xmit_err++;
 		return -ENXIO;
 	}
@@ -1082,6 +1084,7 @@ int onic_xdp_xmit(struct net_device *dev, int n, struct xdp_frame **frames, u32 
 		err = onic_xmit_xdp_ring(priv, tx_queue, frame);
 		if (err != ONIC_XDP_TX) {
 			xdp_return_frame_rx_napi(frame);
+			netdev_err(dev, "Failed to transmit frame");
 			priv->xdp_stats.xdp_xmit_err++;
 			drops++;
 		} else {
