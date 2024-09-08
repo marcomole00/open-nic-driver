@@ -1054,11 +1054,6 @@ int onic_xdp_xmit(struct net_device *dev, int n, struct xdp_frame **frames, u32 
 	struct netdev_queue *nq;
 	int i, drops = 0, cpu = smp_processor_id();
 
-	if (unlikely(test_and_set_bit(0, priv->state))){
-			netdev_err(dev, "Device is not running");
-			priv->xdp_stats.xdp_xmit_err++;
-		return -ENETDOWN;
-	}
 	if (unlikely(flags & ~XDP_XMIT_FLAGS_MASK)){
 			netdev_err(dev, "Invalid flags");
 			priv->xdp_stats.xdp_xmit_err++;
