@@ -133,6 +133,8 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
 	bool debug = 0;
 	ring = &tx_queue->ring;
 
+	onic_tx_clean(tx_queue);
+
 	if (onic_ring_full(ring)) {
 		if (debug)
 			netdev_info(priv->netdev, "ring is full");
