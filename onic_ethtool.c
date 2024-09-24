@@ -345,6 +345,15 @@ static void onic_get_ethtool_stats(struct net_device *netdev,
       }
     }
 
+    // reset the xdp stats after reading them, this is the behavior of the hardware stats registers
+      priv->xdp_stats.xdp_redirect = 0;
+      priv->xdp_stats.xdp_pass = 0;
+      priv->xdp_stats.xdp_drop = 0;
+      priv->xdp_stats.xdp_tx = 0;
+      priv->xdp_stats.xdp_tx_err = 0;
+      priv->xdp_stats.xdp_xmit = 0;
+      priv->xdp_stats.xdp_xmit_err = 0;
+
     return;
 }
 
