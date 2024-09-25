@@ -130,7 +130,7 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
 	dma_addr_t dma_addr;
 	struct onic_ring *ring;
   struct qdma_h2c_st_desc desc;
-	bool debug = 0;
+	bool debug = 1;
 	ring = &tx_queue->ring;
 
 	onic_tx_clean(tx_queue);
@@ -155,6 +155,7 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
 	tx_queue->buffer[ring->next_to_use].type = ONIC_TX_BUF_TYPE_XDP;
 	tx_queue->buffer[ring->next_to_use].dma_addr = dma_addr;
 	tx_queue->buffer[ring->next_to_use].len = xdpf->len;
+	
 
 
 	priv->netdev_stats.tx_packets++;
@@ -164,8 +165,8 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
 	// This gets called only if version is >= 5.3.0 since we do not support
 	// TX/REDIR on older versions
 	if (onic_ring_full(ring) || !netdev_xmit_more()) {
-		netdev_info(priv->netdev, "ring full %d, xmit_more %d (if i'm here it should be retransmitting)",
-			    onic_ring_full(ring), netdev_xmit_more());
+		// netdev_info(priv->netdev, "ring full %d, xmit_more %d (if i'm here it should be retransmitting)",
+			    // onic_ring_full(ring), netdev_xmit_more());
 		wmb();
 		onic_set_tx_head(priv->hw.qdma, tx_queue->qid, ring->next_to_use);
 	}
@@ -182,13 +183,13 @@ static int onic_xdp_xmit_back(struct onic_rx_queue *q, struct xdp_buff *xdp_buff
 	u32 ret = 0, cpu = smp_processor_id();
 
 	if (unlikely(!xdpf)){
-		priv->xdp_stats.xdp_tx_err++;
+		q->xdp_rx_stats.xdp_tx_err++;
 		return ONIC_XDP_CONSUMED;
 	}
 
 	tx_queue = q->xdp_prog ? priv->tx_queue[q->qid] : NULL;
 	if (unlikely(!tx_queue)){
-		priv->xdp_stats.xdp_tx_err++;
+		q->xdp_rx_stats.xdp_tx_err++;
 		return -ENXIO;
 	}
 
@@ -197,7 +198,7 @@ static int onic_xdp_xmit_back(struct onic_rx_queue *q, struct xdp_buff *xdp_buff
 
 	__netif_tx_lock(nq, cpu);
 	ret = onic_xmit_xdp_ring(priv, tx_queue, xdpf);
-	priv->xdp_stats.xdp_tx++;
+	q->xdp_rx_stats.xdp_tx++;
 	__netif_tx_unlock(nq);
 
 	return ret;
@@ -217,7 +218,7 @@ static void *onic_run_xdp(struct onic_rx_queue *rx_queue, struct xdp_buff *xdp_b
 	
 	switch (act){
 		case XDP_PASS:
-			priv->xdp_stats.xdp_pass++;
+			rx_queue->xdp_rx_stats.xdp_pass++;
 			break;
 // Since before 5.3.0 the xmit_more hint was tied to skbs, and in XDP we run
 // before skb allocation, we cannot correctly implement onic_xdp_xmit_frame and
@@ -233,7 +234,7 @@ static void *onic_run_xdp(struct onic_rx_queue *rx_queue, struct xdp_buff *xdp_b
 			if (err)
 				goto out_failure;
 			result = ONIC_XDP_REDIR;
-			priv->xdp_stats.xdp_redirect++;
+			rx_queue->xdp_rx_stats.xdp_redirect++;
 			break;
 #elif defined(RHEL_RELEASE_CODE)
 #if RHEL_RELEASE_CODE >= RHEL_RELEASE_VERSION(8, 1))
@@ -244,7 +245,7 @@ static void *onic_run_xdp(struct onic_rx_queue *rx_queue, struct xdp_buff *xdp_b
 			err = xdp_do_redirect(rx_queue->netdev, xdp_buff, xdp_prog);
 			if (!err){
 				result = ONIC_XDP_REDIR;
-			  priv->xdp_stats.xdp_redirect++;
+			  rx_queue->xdp_rx_stats.xdp_redirect++;
 			}
 			else
 				result = ONIC_XDP_CONSUMED;
@@ -267,7 +268,7 @@ out_failure:
 			fallthrough;
     case XDP_DROP:
 			result = ONIC_XDP_CONSUMED;
-			priv->xdp_stats.xdp_drop++;
+			rx_queue->xdp_rx_stats.xdp_drop++;
 			break;
   }
 
@@ -1057,17 +1058,19 @@ int onic_xdp_xmit(struct net_device *dev, int n, struct xdp_frame **frames, u32 
 	struct netdev_queue *nq;
 	int i, drops = 0, cpu = smp_processor_id();
 
-	if (unlikely(flags & ~XDP_XMIT_FLAGS_MASK)){
-			netdev_err(dev, "Invalid flags");
-			priv->xdp_stats.xdp_xmit_err++;
-		return -EINVAL;
+	tx_queue =  onic_xdp_tx_queue_mapping(priv);
+
+	if (!priv->xdp_prog) {
+		netdev_err(dev, "No XDP program");
+		tx_queue->xdp_tx_stats.xdp_xmit_err++;
+		return -ENXIO;
 	}
 
-	tx_queue = priv->xdp_prog ? onic_xdp_tx_queue_mapping(priv) : NULL;
-	if (unlikely(!tx_queue)){
-		netdev_err(dev, "No XDP TX queue");
-			priv->xdp_stats.xdp_xmit_err++;
-		return -ENXIO;
+
+	if (unlikely(flags & ~XDP_XMIT_FLAGS_MASK)){
+			netdev_err(dev, "Invalid flags");
+		tx_queue->xdp_tx_stats.xdp_xmit_err++;
+		return -EINVAL;
 	}
 
 	tx_ring = &tx_queue->ring;
@@ -1083,10 +1086,10 @@ int onic_xdp_xmit(struct net_device *dev, int n, struct xdp_frame **frames, u32 
 		if (err != ONIC_XDP_TX) {
 			xdp_return_frame_rx_napi(frame);
 			netdev_err(dev, "Failed to transmit frame");
-			priv->xdp_stats.xdp_xmit_err++;
+			tx_queue->xdp_tx_stats.xdp_xmit_err++;
 			drops++;
 		} else {
-			priv->xdp_stats.xdp_xmit++;
+			tx_queue->xdp_tx_stats.xdp_xmit_err++;
 		}
 	}
 	__netif_tx_unlock(nq);
