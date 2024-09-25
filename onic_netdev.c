@@ -77,9 +77,9 @@ static void onic_tx_clean(struct onic_tx_queue *q)
 	for (i = 0; i < work; ++i) {
 		struct onic_tx_buffer *buf = &q->buffer[ring->next_to_clean];
 
+		dma_unmap_single(&priv->pdev->dev, buf->dma_addr, buf->len, DMA_TO_DEVICE);
+
 		if (buf->type == ONIC_TX_BUF_TYPE_SKB) {
-		  dma_unmap_single(&priv->pdev->dev, buf->dma_addr, buf->len,
-				 DMA_TO_DEVICE);
 			dev_kfree_skb_any(buf->skb);
 		} else {
 			xdp_return_frame(buf->xdpf);
@@ -468,11 +468,6 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 
 	if (xdp_xmit & ONIC_XDP_REDIR)
 		xdp_do_flush();
-
-	if (xdp_xmit & ONIC_XDP_TX) {
-		struct onic_tx_queue *tx_queue = onic_xdp_tx_queue_mapping(priv);
-		onic_ring_increment_tail(&tx_queue->ring);
-	}
 
 	if (cmpl_ring->next_to_clean == cmpl_stat.pidx) {
 		if (debug)
