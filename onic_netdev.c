@@ -164,6 +164,7 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
 
 	// This gets called only if version is >= 5.3.0 since we do not support
 	// TX/REDIR on older versions
+	netdev_info(priv->netdev, "ring full %d, xmit_more %d", onic_ring_full(ring), netdev_xmit_more());
 	if (onic_ring_full(ring) || !netdev_xmit_more()) {
 		// netdev_info(priv->netdev, "ring full %d, xmit_more %d (if i'm here it should be retransmitting)",
 			    // onic_ring_full(ring), netdev_xmit_more());
@@ -468,7 +469,7 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 	if (xdp_xmit & ONIC_XDP_REDIR)
 		xdp_do_flush();
 
-	if (xdp_xmit & XDP_TX) {
+	if (xdp_xmit & ONIC_XDP_TX) {
 		struct onic_tx_queue *tx_queue = onic_xdp_tx_queue_mapping(priv);
 		onic_ring_increment_tail(&tx_queue->ring);
 	}
@@ -588,6 +589,9 @@ static int onic_init_tx_queue(struct onic_private *priv, u16 qid)
 	ring->next_to_use = 0;
 	ring->next_to_clean = 0;
 	ring->color = 0;
+
+	netdev_info(dev, "TX queue %d, ring count %d, ring size %d, real_count %d", 
+		    qid, ring->count, size, real_count);
 
 	/* initialize TX buffers */
 	q->buffer =
