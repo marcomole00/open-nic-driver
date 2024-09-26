@@ -82,7 +82,7 @@ static void onic_tx_clean(struct onic_tx_queue *q)
 		if (buf->type == ONIC_TX_BUF_TYPE_SKB) {
 			dev_kfree_skb_any(buf->skb);
 		}  else if (buf->type == ONIC_TX_BUF_TYPE_XDP) {
-			xdp_return_frame(buf->xdpf);
+			// nothing to do here
 		} else {
 			netdev_err(priv->netdev, "unknown buffer type %d\n", buf->type);
 		}
