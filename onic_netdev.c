@@ -81,8 +81,10 @@ static void onic_tx_clean(struct onic_tx_queue *q)
 
 		if (buf->type == ONIC_TX_BUF_TYPE_SKB) {
 			dev_kfree_skb_any(buf->skb);
-		} else {
+		}  else if (buf->type == ONIC_TX_BUF_TYPE_XDP) {
 			xdp_return_frame(buf->xdpf);
+		} else {
+			netdev_err(priv->netdev, "unknown buffer type %d\n", buf->type);
 		}
 
 		onic_ring_increment_tail(ring);
@@ -532,7 +534,7 @@ static void onic_clear_tx_queue(struct onic_private *priv, u16 qid)
 	if (ring->desc)
 		dma_free_coherent(&priv->pdev->dev, size, ring->desc,
 				  ring->dma_addr);
-	kfree(q->buffer);
+	if (q->buffer) kfree(q->buffer);
 	kfree(q);
 	priv->tx_queue[qid] = NULL;
 }
@@ -650,7 +652,7 @@ static void onic_clear_rx_queue(struct onic_private *priv, u16 qid)
 		__free_pages(pg, 0);
 	}
 
-	kfree(q->buffer);
+	if (q->buffer) kfree(q->buffer);
 	kfree(q);
 	priv->rx_queue[qid] = NULL;
 }
