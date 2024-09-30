@@ -166,7 +166,6 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
 
 	// This gets called only if version is >= 5.3.0 since we do not support
 	// TX/REDIR on older versions
-	netdev_info(priv->netdev, "ring full %d, xmit_more %d", onic_ring_full(ring), netdev_xmit_more());
 	if (onic_ring_full(ring) || !netdev_xmit_more()) {
 		wmb();
 		onic_set_tx_head(priv->hw.qdma, tx_queue->qid, ring->next_to_use);
@@ -1092,9 +1091,6 @@ int onic_xdp_xmit(struct net_device *dev, int n, struct xdp_frame **frames, u32 
 		}
 	}
 	__netif_tx_unlock(nq);
-
-	if (unlikely(flags & XDP_XMIT_FLUSH))
-		onic_ring_increment_tail(tx_ring);
 
 	return n - drops;
 }
