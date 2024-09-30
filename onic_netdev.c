@@ -168,8 +168,6 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
 	// TX/REDIR on older versions
 	netdev_info(priv->netdev, "ring full %d, xmit_more %d", onic_ring_full(ring), netdev_xmit_more());
 	if (onic_ring_full(ring) || !netdev_xmit_more()) {
-		// netdev_info(priv->netdev, "ring full %d, xmit_more %d (if i'm here it should be retransmitting)",
-			    // onic_ring_full(ring), netdev_xmit_more());
 		wmb();
 		onic_set_tx_head(priv->hw.qdma, tx_queue->qid, ring->next_to_use);
 	}
