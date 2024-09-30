@@ -1090,7 +1090,7 @@ int onic_xdp_xmit(struct net_device *dev, int n, struct xdp_frame **frames, u32 
 			tx_queue->xdp_tx_stats.xdp_xmit_err++;
 			drops++;
 		} else {
-			tx_queue->xdp_tx_stats.xdp_xmit_err++;
+			tx_queue->xdp_tx_stats.xdp_xmit++;
 		}
 	}
 	__netif_tx_unlock(nq);
