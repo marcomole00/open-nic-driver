@@ -396,8 +396,11 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 			}
 		}
 
+		//TODO: replace this with per-queue stats in order to avoid contention
+		spin_lock(&priv->rx_lock);
 		priv->netdev_stats.rx_packets++;
 		priv->netdev_stats.rx_bytes += len;
+		spin_unlock(&priv->rx_lock);
 
 		onic_ring_increment_tail(desc_ring);
 
