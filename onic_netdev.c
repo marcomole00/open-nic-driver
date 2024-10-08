@@ -1009,6 +1009,7 @@ inline void onic_get_stats64(struct net_device *dev, struct rtnl_link_stats64 *s
 	struct rtnl_link_stats64 *pcpu_ptr;
 	struct rtnl_link_stats64 total_stats = { };
 	unsigned int cpu;
+	int debug = 1;
 	for_each_possible_cpu(cpu) {
 		pcpu_ptr = per_cpu_ptr(priv->netdev_stats, cpu);
 		
@@ -1019,6 +1020,13 @@ inline void onic_get_stats64(struct net_device *dev, struct rtnl_link_stats64 *s
 		total_stats.tx_bytes += pcpu_ptr->tx_bytes;
 		total_stats.tx_errors += pcpu_ptr->tx_errors;
 		total_stats.tx_dropped += pcpu_ptr->tx_dropped;
+
+		if(debug) {
+			netdev_info(dev, "cpu %d, rx_packets %lld, rx_bytes %lld, tx_packets %lld, tx_bytes %lld, tx_errors %lld, tx_dropped %lld",
+				cpu, pcpu_ptr->rx_packets, pcpu_ptr->rx_bytes, pcpu_ptr->tx_packets, pcpu_ptr->tx_bytes, pcpu_ptr->tx_errors, pcpu_ptr->tx_dropped);
+		}
+
+
 	}
 	
 	stats->tx_packets = total_stats.tx_packets;
