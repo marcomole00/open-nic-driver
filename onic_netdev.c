@@ -14,6 +14,8 @@
  * The full GNU General Public License is included in this distribution in
  * the file called "COPYING".
  */
+#include <linux/if_link.h>
+#include <linux/pci_regs.h>
 #include <linux/version.h>
 #include <linux/pci.h>
 #include <linux/etherdevice.h>
@@ -131,10 +133,12 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
 	u8 *desc_ptr;
 	dma_addr_t dma_addr;
 	struct onic_ring *ring;
-  struct qdma_h2c_st_desc desc;
+  	struct qdma_h2c_st_desc desc;
 	bool debug = 1;
-	ring = &tx_queue->ring;
+	struct rtnl_link_stats64 *pcpu_stats_pointer;
 
+	ring = &tx_queue->ring;
+	
 	onic_tx_clean(tx_queue);
 
 	if (onic_ring_full(ring)) {
@@ -159,9 +163,9 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
 	tx_queue->buffer[ring->next_to_use].len = xdpf->len;
 	
 
-
-	priv->netdev_stats.tx_packets++;
-	priv->netdev_stats.tx_bytes += xdpf->len;
+  	pcpu_stats_pointer = this_cpu_ptr(priv->netdev_stats);
+  	pcpu_stats_pointer->tx_packets++;
+	pcpu_stats_pointer->tx_bytes += xdpf->len;
 	onic_ring_increment_head(ring);
 
 	// This gets called only if version is >= 5.3.0 since we do not support
@@ -298,6 +302,8 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 
 	struct xdp_buff xdp;
 	unsigned int xdp_xmit = 0;
+	struct rtnl_link_stats64 *pcpu_stats_pointer;
+	pcpu_stats_pointer = this_cpu_ptr(priv->netdev_stats);
 
 	for (i = 0; i < priv->num_tx_queues; i++)
 		onic_tx_clean(priv->tx_queue[i]);
@@ -397,10 +403,8 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 		}
 
 		//TODO: replace this with per-queue stats in order to avoid contention
-		spin_lock(&priv->rx_lock);
-		priv->netdev_stats.rx_packets++;
-		priv->netdev_stats.rx_bytes += len;
-		spin_unlock(&priv->rx_lock);
+		pcpu_stats_pointer->rx_packets++;
+		pcpu_stats_pointer->rx_bytes += len;
 
 		onic_ring_increment_tail(desc_ring);
 
@@ -509,8 +513,8 @@ out_of_budget:
 		netdev_info(
 			q->netdev,
 			"rx_poll returning work %u, rx_packets %lld, rx_bytes %lld",
-			work, priv->netdev_stats.rx_packets,
-			priv->netdev_stats.rx_bytes);
+			work, pcpu_stats_pointer->rx_packets,
+			pcpu_stats_pointer->rx_bytes);
 	return work;
 }
 
@@ -912,6 +916,8 @@ netdev_tx_t onic_xmit_frame(struct sk_buff *skb, struct net_device *dev)
 	u8 *desc_ptr;
 	int rv;
 	bool debug = 0;
+	struct rtnl_link_stats64 *pcpu_stats_pointer;
+	pcpu_stats_pointer = this_cpu_ptr(priv->netdev_stats);
 
 	q = priv->tx_queue[qid];
 	ring = &q->ring;
@@ -935,8 +941,8 @@ netdev_tx_t onic_xmit_frame(struct sk_buff *skb, struct net_device *dev)
 
 	if (unlikely(dma_mapping_error(&priv->pdev->dev, dma_addr))) {
 		dev_kfree_skb(skb);
-		priv->netdev_stats.tx_dropped++;
-		priv->netdev_stats.tx_errors++;
+		pcpu_stats_pointer->tx_dropped++;
+		pcpu_stats_pointer->tx_errors++;
 		return NETDEV_TX_OK;
 	}
 
@@ -951,8 +957,8 @@ netdev_tx_t onic_xmit_frame(struct sk_buff *skb, struct net_device *dev)
 	q->buffer[ring->next_to_use].dma_addr = dma_addr;
 	q->buffer[ring->next_to_use].len = skb->len;
 
-	priv->netdev_stats.tx_packets++;
-	priv->netdev_stats.tx_bytes += skb->len;
+	pcpu_stats_pointer->tx_packets++;
+	pcpu_stats_pointer->tx_bytes += skb->len;
 
 	onic_ring_increment_head(ring);
 
@@ -1000,13 +1006,27 @@ int onic_change_mtu(struct net_device *dev, int mtu)
 inline void onic_get_stats64(struct net_device *dev, struct rtnl_link_stats64 *stats)
 {
 	struct onic_private *priv = netdev_priv(dev);
-
-	stats->tx_packets = priv->netdev_stats.tx_packets;
-	stats->tx_bytes = priv->netdev_stats.tx_bytes;
-	stats->rx_packets = priv->netdev_stats.rx_packets;
-	stats->rx_bytes = priv->netdev_stats.rx_bytes;
-	stats->tx_dropped = priv->netdev_stats.tx_dropped;
-	stats->tx_errors = priv->netdev_stats.tx_errors;
+	struct rtnl_link_stats64 *pcpu_ptr;
+	struct rtnl_link_stats64 total_stats = { };
+	unsigned int cpu;
+	for_each_possible_cpu(cpu) {
+		pcpu_ptr = per_cpu_ptr(priv->netdev_stats, cpu);
+		
+		
+		total_stats.rx_packets += pcpu_ptr->rx_packets;
+		total_stats.rx_bytes += pcpu_ptr->rx_bytes;
+		total_stats.tx_packets += pcpu_ptr->tx_packets;
+		total_stats.tx_bytes += pcpu_ptr->tx_bytes;
+		total_stats.tx_errors += pcpu_ptr->tx_errors;
+		total_stats.tx_dropped += pcpu_ptr->tx_dropped;
+	}
+	
+	stats->tx_packets = total_stats.tx_packets;
+	stats->tx_bytes = total_stats.tx_bytes;
+	stats->rx_packets = total_stats.rx_packets;
+	stats->rx_bytes = total_stats.rx_bytes;
+	stats->tx_dropped = total_stats.tx_dropped;
+	stats->tx_errors = total_stats.tx_errors;
 }
 
 
