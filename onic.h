@@ -104,7 +104,7 @@ struct onic_private {
 	u16 num_rx_queues;
 
 	struct net_device *netdev;
-	struct rtnl_link_stats64 netdev_stats;
+	struct rtnl_link_stats64 *netdev_stats;
 	spinlock_t tx_lock;
 	spinlock_t rx_lock;
 
