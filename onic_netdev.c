@@ -750,10 +750,11 @@ err_free_pp:
 
 static int onic_init_rx_queue(struct onic_private *priv, u16 qid)
 {
-	const u8 bufsz_idx = 13;
-	const u8 desc_rngcnt_idx = 13;
+	// TODO: make these configurable via ethtool
+	const u8 bufsz_idx = 8;
+	const u8 desc_rngcnt_idx = 8;
 	//const u8 cmpl_rngcnt_idx = 15;
-	const u8 cmpl_rngcnt_idx = 13;
+	const u8 cmpl_rngcnt_idx = 8;
 	struct net_device *dev = priv->netdev;
 	struct onic_rx_queue *q;
 	struct onic_ring *ring;
@@ -818,6 +819,7 @@ static int onic_init_rx_queue(struct onic_private *priv, u16 qid)
 		struct page *pg = page_pool_dev_alloc_pages(q->page_pool);
 
 		if (!pg) {
+			netdev_err(dev, "page_pool_dev_alloc_pages failed at %d", i);
 			rv = -ENOMEM;
 			goto clear_rx_queue;
 		}
