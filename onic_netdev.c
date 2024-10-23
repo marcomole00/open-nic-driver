@@ -247,8 +247,8 @@ static void *onic_run_xdp(struct onic_rx_queue *rx_queue, struct xdp_buff *xdp_b
 	int err, result = ONIC_XDP_PASS;
 	struct bpf_prog *xdp_prog;
 	u32 act;
-	struct page *page = xdp_buff->data_hard_start;
-
+	struct page *page = virt_to_page(xdp_buff->data_hard_start);
+	
 	xdp_prog = rx_queue->xdp_prog;
 	if (!xdp_prog){
 		goto out;
