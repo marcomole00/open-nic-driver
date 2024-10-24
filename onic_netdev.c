@@ -125,7 +125,7 @@ static void onic_rx_page_refill(struct onic_rx_queue *q)
 	struct onic_ring *desc_ring = &q->desc_ring;
 	struct qdma_c2h_st_desc desc;
 	struct page *pg;
-	u8 *desc_ptr = desc_ring->desc + QDMA_C2H_ST_DESC_SIZE * desc_ring->next_to_use;
+	u8 *desc_ptr = desc_ring->desc + QDMA_C2H_ST_DESC_SIZE * desc_ring->next_to_clean;
 
 	pg = page_pool_dev_alloc_pages(q->page_pool);
 
@@ -460,7 +460,6 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 		// here the page where packet data was written has either been recycled or marked for recycling
 		onic_rx_page_refill(q);
 
-		//TODO: replace this with per-queue stats in order to avoid contention
 		pcpu_stats_pointer->rx_packets++;
 		pcpu_stats_pointer->rx_bytes += len;
 
