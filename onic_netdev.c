@@ -127,6 +127,7 @@ static void onic_rx_page_refill(struct onic_rx_queue *q)
 	struct page *pg;
 	u8 *desc_ptr = desc_ring->desc + QDMA_C2H_ST_DESC_SIZE * desc_ring->next_to_clean;
 
+	// TODO: this may fail , handle this case
 	pg = page_pool_dev_alloc_pages(q->page_pool);
 
 	q->buffer[desc_ring->next_to_clean].pg = pg;
@@ -135,9 +136,6 @@ static void onic_rx_page_refill(struct onic_rx_queue *q)
 
 	desc.dst_addr = page_pool_get_dma_addr(pg) + XDP_PACKET_HEADROOM;
 	qdma_pack_c2h_st_desc(desc_ptr, &desc);
-
-
-
 }
 
 static struct onic_tx_queue *onic_xdp_tx_queue_mapping(struct onic_private *priv)
@@ -408,6 +406,11 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 		int len = cmpl.pkt_len;
 		u8 *data;
 
+		//TODO the mtu is way less than PAGE_SIZE-> make so that the dma syncs only the len of the packet 
+		dma_sync_single_for_cpu(priv->pdev->dev.parent,
+					page_pool_get_dma_addr(buf->pg) +
+						buf->offset,
+					PAGE_SIZE, DMA_FROM_DEVICE);
 		// data is the pointer to the data in the page, and its being passed into the sk_buff struct
 		/* maximum packet size is 1514, less than the page size */
 		data = (u8 *)(page_address(buf->pg) + buf->offset);
@@ -732,7 +735,7 @@ static int onic_create_page_pool(struct onic_private *priv, struct onic_rx_queue
 		.order = 0,
 		.flags = PP_FLAG_DMA_MAP | PP_FLAG_DMA_SYNC_DEV,
 		.pool_size = size,
-		.nid = NUMA_NO_NODE,
+		.nid = dev_to_node(&priv->pdev->dev),
 		.dev = priv->pdev->dev.parent,
 		.dma_dir = xdp_prog ? DMA_BIDIRECTIONAL : DMA_FROM_DEVICE,
 		.offset = XDP_PACKET_HEADROOM,
