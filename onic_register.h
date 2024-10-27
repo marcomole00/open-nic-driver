@@ -265,4 +265,9 @@ static inline void onic_write_reg(struct onic_hardware *hw, u32 offset, u32 val)
 #define CMAC_ADPT_OFFSET_RX_PKT_DROP(i)			(CMAC_ADPT_OFFSET(i) + 0x14)
 #define CMAC_ADPT_OFFSET_RX_PKT_ERROR(i)		(CMAC_ADPT_OFFSET(i) + 0x18)
 
+/* INDIRECTION TABLE*/
+#define INDIRECTION_TABLE_BASE_ADDR			  QDMA_FUNC_OFFSET_INDIR_TABLE(0,0)
+#define INDIRECTION_TABLE_SIZE             	  0x80 //TODO: i took this value from Pontarelli, not sure if it is correct
+#define ONIC_EN_RSS_KEY_SIZE	  			  40
+
 #endif
