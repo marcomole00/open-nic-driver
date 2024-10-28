@@ -410,7 +410,7 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 		dma_sync_single_for_cpu(priv->pdev->dev.parent,
 					page_pool_get_dma_addr(buf->pg) +
 						buf->offset,
-					PAGE_SIZE, DMA_FROM_DEVICE);
+						len, DMA_FROM_DEVICE);
 		// data is the pointer to the data in the page, and its being passed into the sk_buff struct
 		/* maximum packet size is 1514, less than the page size */
 		data = (u8 *)(page_address(buf->pg) + buf->offset);
@@ -739,7 +739,7 @@ static int onic_create_page_pool(struct onic_private *priv, struct onic_rx_queue
 		.dev = priv->pdev->dev.parent,
 		.dma_dir = xdp_prog ? DMA_BIDIRECTIONAL : DMA_FROM_DEVICE,
 		.offset = XDP_PACKET_HEADROOM,
-		.max_len = PAGE_SIZE,
+		.max_len = priv->netdev->mtu + ETH_HLEN,
 	};
 	int err;
 
