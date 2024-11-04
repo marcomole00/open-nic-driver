@@ -359,8 +359,12 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 		struct onic_rx_buffer *buf =
 			&q->buffer[desc_ring->next_to_clean];
 		struct sk_buff *skb;
+		dma_addr_t phys_addr;
 		int len = cmpl.pkt_len;
 		u8 *data;
+		phys_addr = (dma_addr_t) desc_ring->desc + QDMA_C2H_ST_DESC_SIZE * cmpl_ring->next_to_clean;
+		
+		dma_sync_single_for_cpu(priv->pdev->dev.parent, phys_addr, len, DMA_FROM_DEVICE);
 
 		// data is the pointer to the data in the page, and its being passed into the sk_buff struct
 		/* maximum packet size is 1514, less than the page size */
