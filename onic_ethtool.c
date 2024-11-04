@@ -240,6 +240,25 @@ static const struct onic_stats onic_gstrings_stats[] = {
     _STAT_ONIC("stat_rx_truncated",
           CMAC_OFFSET_STAT_RX_TRUNCATED(0),
           CMAC_OFFSET_STAT_RX_TRUNCATED(1)),
+    _STAT_ONIC("stat_adapt_tx_sent",
+          CMAC_ADPT_OFFSET_TX_PKT_RECV(0),
+          CMAC_ADPT_OFFSET_TX_PKT_RECV(1)),
+    _STAT_ONIC("stat_adapt_tx_drop",
+          CMAC_ADPT_OFFSET_TX_PKT_DROP(0),
+          CMAC_ADPT_OFFSET_TX_PKT_DROP(1)),
+    _STAT_ONIC("stat_adapt_rx_recv",
+          CMAC_ADPT_OFFSET_RX_PKT_RECV(0),
+          CMAC_ADPT_OFFSET_RX_PKT_RECV(1)),
+    _STAT_ONIC("stat_adapt_rx_drop",
+          CMAC_ADPT_OFFSET_RX_PKT_DROP(0),
+          CMAC_ADPT_OFFSET_RX_PKT_DROP(1)),
+    _STAT_ONIC("stat_adapt_rx_error",
+          CMAC_ADPT_OFFSET_RX_PKT_ERROR(0),
+          CMAC_ADPT_OFFSET_RX_PKT_ERROR(1)),
+
+
+
+          
       
     _STAT_NETDEV("rx_xdp_redirect", ETHTOOL_XDP_REDIRECT),
     _STAT_NETDEV("rx_xdp_pass", ETHTOOL_XDP_PASS ),
