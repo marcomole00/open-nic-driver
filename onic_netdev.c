@@ -177,7 +177,7 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
 		struct page *page = virt_to_page(xdpf->data);
 		//TODO  i don't get why adding the size of the xdp_frame struct to the dma_addr. mvneta does this 
 		dma_addr = page_pool_get_dma_addr(page) + sizeof(*xdpf) + xdpf->headroom;
-		dma_sync_single_for_device(priv->pdev->dev.parent, dma_addr,
+		dma_sync_single_for_device(&priv->pdev->dev, dma_addr,
 					   xdpf->len, DMA_BIDIRECTIONAL);
 		
 	}
@@ -407,7 +407,7 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 		u8 *data;
 
 		//TODO the mtu is way less than PAGE_SIZE-> make so that the dma syncs only the len of the packet 
-		dma_sync_single_for_cpu(priv->pdev->dev.parent,
+		dma_sync_single_for_cpu(&priv->pdev->dev,
 					page_pool_get_dma_addr(buf->pg) +
 						buf->offset,
 						len, DMA_FROM_DEVICE);
@@ -736,7 +736,7 @@ static int onic_create_page_pool(struct onic_private *priv, struct onic_rx_queue
 		.flags = PP_FLAG_DMA_MAP | PP_FLAG_DMA_SYNC_DEV,
 		.pool_size = size,
 		.nid = dev_to_node(&priv->pdev->dev),
-		.dev = priv->pdev->dev.parent,
+		.dev = &priv->pdev->dev,
 		.dma_dir = xdp_prog ? DMA_BIDIRECTIONAL : DMA_FROM_DEVICE,
 		.offset = XDP_PACKET_HEADROOM,
 		.max_len = priv->netdev->mtu + ETH_HLEN,
