@@ -47,4 +47,8 @@ int onic_init_interrupt(struct onic_private *priv);
  **/
 void onic_clear_interrupt(struct onic_private *priv);
 
+int onic_queue_pair_disable(struct onic_private *priv, u16 qid);
+
+int onic_queue_pair_enable(struct onic_private *priv, u16 qid);
+
 #endif

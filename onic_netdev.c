@@ -1180,6 +1180,7 @@ int onic_xdp(struct net_device *dev, struct netdev_bpf *xdp) {
 	switch (xdp->command) {
 		case XDP_SETUP_PROG:
 			return onic_setup_xdp_prog(dev, xdp->prog);
+		case XDP_SET
 		default:
 			return -EINVAL;
 	}

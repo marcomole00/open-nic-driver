@@ -150,6 +150,9 @@ struct onic_private {
 	struct onic_rx_queue *rx_queue[ONIC_MAX_QUEUES];
 
 	struct onic_hardware hw;
+
+	/* tracks which queue pairs are in xsk mode*/
+	u16 af_xdp_zc_qps;
 };
 
 #endif

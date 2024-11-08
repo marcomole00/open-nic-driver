@@ -121,8 +121,8 @@ static int onic_init_q_vector(struct onic_private *priv, u16 vid)
 	/* cpumask_set_cpu(cpu, &vec->affinity_mask); */
 	/* vec->numa_node = node; */
 
-	dev_info(&pdev->dev, "Setup IRQ vector %d with name %s",
-		 pci_irq_vector(pdev, vid), name);
+	dev_info(&pdev->dev, "Setup IRQ vector %d with name %s. pci_irq_vector is %d",
+		 pci_irq_vector(pdev, vid), name), pci_irq_vector(pdev, vid);
 	priv->q_vector[vid] = vec;
 
 	return 0;
@@ -263,4 +263,30 @@ void onic_clear_interrupt(struct onic_private *priv)
 
 	while (vid--)
 		onic_clear_q_vector(priv, vid);
+}
+
+
+void onic_disable_q_vector(struct onic_q_vector *vec)
+{
+	// disable then synchronize the queue vector interrupt
+	disable_irq(pci_irq_vector(vec->priv->pdev, vec->vid));
+	// synchronize_irq blocks until the last handler has finished
+	synchronize_irq(pci_irq_vector(vec->priv->pdev, vec->vid));
+
+}
+
+void onic_enable_q_vector(struct onic_q_vector *vec)
+{
+	// enable the queue vector interrupt
+	enable_irq(pci_irq_vector(vec->priv->pdev, vec->vid));
+}
+
+
+int onic_queue_pair_disable(struct onic_private *priv, u16 qid){
+	return -1;
+}
+
+int onic_queue_pair_enable(struct onic_private *priv, u16 qid);
+{
+	return -1;
 }
