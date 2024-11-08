@@ -23,6 +23,7 @@
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/bpf_trace.h>
+#include <net/page_pool.h>
 
 #include "onic_netdev.h"
 #include "onic_hardware.h"
@@ -84,7 +85,7 @@ static void onic_tx_clean(struct onic_tx_queue *q)
 		if (buf->type == ONIC_TX_BUF_TYPE_SKB) {
 			dev_kfree_skb_any(buf->skb);
 		}  else if (buf->type == ONIC_TX_BUF_TYPE_XDP) {
-			// nothing to do here
+			xdp_return_frame_rx_napi(buf->xdpf);
 		} else {
 			netdev_err(priv->netdev, "unknown buffer type %d\n", buf->type);
 		}
@@ -116,6 +117,25 @@ static void onic_rx_refill(struct onic_rx_queue *q)
 	ring->next_to_use %= onic_ring_get_real_count(ring);
 
 	onic_set_rx_head(priv->hw.qdma, q->qid, ring->next_to_use);
+
+}
+
+static void onic_rx_page_refill(struct onic_rx_queue *q)
+{
+	struct onic_ring *desc_ring = &q->desc_ring;
+	struct qdma_c2h_st_desc desc;
+	struct page *pg;
+	u8 *desc_ptr = desc_ring->desc + QDMA_C2H_ST_DESC_SIZE * desc_ring->next_to_clean;
+
+	// TODO: this may fail , handle this case
+	pg = page_pool_dev_alloc_pages(q->page_pool);
+
+	q->buffer[desc_ring->next_to_clean].pg = pg;
+	q->buffer[desc_ring->next_to_clean].offset = XDP_PACKET_HEADROOM;
+
+
+	desc.dst_addr = page_pool_get_dma_addr(pg) + XDP_PACKET_HEADROOM;
+	qdma_pack_c2h_st_desc(desc_ptr, &desc);
 }
 
 static struct onic_tx_queue *onic_xdp_tx_queue_mapping(struct onic_private *priv)
@@ -128,7 +148,7 @@ static struct onic_tx_queue *onic_xdp_tx_queue_mapping(struct onic_private *priv
 	return priv->tx_queue[r_idx];
 }
 
-static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *tx_queue, struct xdp_frame *xdpf)
+static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *tx_queue, struct xdp_frame *xdpf, bool dma_map)
  {
 	u8 *desc_ptr;
 	dma_addr_t dma_addr;
@@ -147,9 +167,22 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
 		return NETDEV_TX_BUSY;
 	}
 
-	dma_addr = dma_map_single(&priv->pdev->dev, xdpf->data,xdpf->len, DMA_TO_DEVICE);
-	if (unlikely(dma_mapping_error(&priv->pdev->dev, dma_addr)))
-		return ONIC_XDP_CONSUMED;
+	if (dma_map) {
+		/* ndo_xdp_dmit */
+		dma_addr = dma_map_single(&priv->pdev->dev, xdpf->data,xdpf->len, DMA_TO_DEVICE);
+		if (unlikely(dma_mapping_error(&priv->pdev->dev, dma_addr)))
+			return ONIC_XDP_CONSUMED;
+	} else {
+		/* ONIC_XDP_TX */
+		struct page *page = virt_to_page(xdpf->data);
+		//TODO  i don't get why adding the size of the xdp_frame struct to the dma_addr. mvneta does this 
+		dma_addr = page_pool_get_dma_addr(page) + sizeof(*xdpf) + xdpf->headroom;
+		dma_sync_single_for_device(&priv->pdev->dev, dma_addr,
+					   xdpf->len, DMA_BIDIRECTIONAL);
+		
+	}
+
+	
 
 	desc_ptr = ring->desc + QDMA_H2C_ST_DESC_SIZE * ring->next_to_use;
 	desc.len = xdpf->len;
@@ -201,7 +234,7 @@ static int onic_xdp_xmit_back(struct onic_rx_queue *q, struct xdp_buff *xdp_buff
 	nq = netdev_get_tx_queue(tx_queue->netdev, tx_queue->qid);
 
 	__netif_tx_lock(nq, cpu);
-	ret = onic_xmit_xdp_ring(priv, tx_queue, xdpf);
+	ret = onic_xmit_xdp_ring(priv, tx_queue, xdpf,false);
 	q->xdp_rx_stats.xdp_tx++;
 	__netif_tx_unlock(nq);
 
@@ -212,7 +245,8 @@ static void *onic_run_xdp(struct onic_rx_queue *rx_queue, struct xdp_buff *xdp_b
 	int err, result = ONIC_XDP_PASS;
 	struct bpf_prog *xdp_prog;
 	u32 act;
-
+	struct page *page = virt_to_page(xdp_buff->data_hard_start);
+	
 	xdp_prog = rx_queue->xdp_prog;
 	if (!xdp_prog){
 		goto out;
@@ -230,13 +264,18 @@ static void *onic_run_xdp(struct onic_rx_queue *rx_queue, struct xdp_buff *xdp_b
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 3, 0)
     case XDP_TX:
 			result = onic_xdp_xmit_back(rx_queue, xdp_buff);
-			if (result == ONIC_XDP_CONSUMED)
+			if (result == ONIC_XDP_CONSUMED) {
+				page_pool_recycle_direct(rx_queue->page_pool, page);
 				goto out_failure;
+				}
 			break;
     case XDP_REDIRECT:
 			err = xdp_do_redirect(rx_queue->netdev, xdp_buff, xdp_prog);
-			if (err)
+			if (err) {
+				result = ONIC_XDP_CONSUMED;
+				page_pool_recycle_direct(rx_queue->page_pool, page);
 				goto out_failure;
+			}
 			result = ONIC_XDP_REDIR;
 			rx_queue->xdp_rx_stats.xdp_redirect++;
 			break;
@@ -244,15 +283,19 @@ static void *onic_run_xdp(struct onic_rx_queue *rx_queue, struct xdp_buff *xdp_b
 #if RHEL_RELEASE_CODE >= RHEL_RELEASE_VERSION(8, 1))
     case XDP_TX:
 			result = onic_xdp_xmit_back(rx_queue, xdp_buff);
+			if (result == ONIC_XDP_CONSUMED)
+				page_pool_recycle_direct(rx_queue->page_pool, page);
+				goto out_failure;
 			break;
     case XDP_REDIRECT:
 			err = xdp_do_redirect(rx_queue->netdev, xdp_buff, xdp_prog);
-			if (!err){
-				result = ONIC_XDP_REDIR;
-			  rx_queue->xdp_rx_stats.xdp_redirect++;
+			if (err) {
+				ret = ONIC_XDP_CONSUMED;
+				page_pool_recycle_direct(rx_queue->page_pool, page);
+				goto out_failure;
 			}
-			else
-				result = ONIC_XDP_CONSUMED;
+			result = ONIC_XDP_REDIR;
+			rx_queue->xdp_rx_stats.xdp_redirect++;
 			break;
 #endif
 #else
@@ -273,6 +316,7 @@ out_failure:
     case XDP_DROP:
 			result = ONIC_XDP_CONSUMED;
 			rx_queue->xdp_rx_stats.xdp_drop++;
+			page_pool_recycle_direct(rx_queue->page_pool, page);
 			break;
   }
 
@@ -359,24 +403,18 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 		struct onic_rx_buffer *buf =
 			&q->buffer[desc_ring->next_to_clean];
 		struct sk_buff *skb;
-		dma_addr_t dma_addr = buf->dma_addr;
+		
 		int len = cmpl.pkt_len;
-		u8 *data;
 
-		dma_sync_single_for_cpu(&priv->pdev->dev, dma_addr, len, DMA_FROM_DEVICE);
+		xdp_init_buff(&xdp, PAGE_SIZE, &q->xdp_rxq);
 
-		// data is the pointer to the data in the page, and its being passed into the sk_buff struct
-		/* maximum packet size is 1514, less than the page size */
-		data = (u8 *)(page_address(buf->pg) + buf->offset);
-
-		xdp.data = page_address(buf->pg) + buf->offset;
-		xdp.rxq = &q->xdp_rxq;
-	 	//xdp.data = xdp.data; // data is the pointer to the data in the page, and its being passed into the sk_buff struct
-	 	xdp.data_end = xdp.data + len; // data + len is the pointer to the end of the data in the page, and its being passed into the sk_buff struct
-	 	xdp.data_hard_start = xdp.data - XDP_PACKET_HEADROOM; 
-		xdp.data_meta = xdp.data; 
-		xdp.frame_sz = PAGE_SIZE;
-
+		dma_sync_single_for_cpu(&priv->pdev->dev,
+					page_pool_get_dma_addr(buf->pg) +
+						buf->offset,
+						len, DMA_FROM_DEVICE);
+   
+		xdp_prepare_buff(&xdp, page_address(buf->pg), buf->offset, len, false);
+		
 		res = onic_run_xdp(q, &xdp,priv);
 		if (IS_ERR(res)) {
 			unsigned int xdp_res = -PTR_ERR(res);
@@ -387,13 +425,22 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 
 			// Allocate skb only if we are continuing to process the packet
 			if (xdp_res & ONIC_XDP_PASS) {
-				skb = napi_alloc_skb(napi, len);
+				
+				// allocate a new skb structure around the data 
+				skb = napi_build_skb(xdp.data_hard_start, PAGE_SIZE);
+
 				if (!skb) {
 					rv = -ENOMEM;
 					break;
 				}
+				
+				// mark the skb for page_pool recycling
+				skb_mark_for_recycle(skb);
+				// reserve space in the skb for the data for the xdp headroom
+				skb_reserve(skb, xdp.data - xdp.data_hard_start);
+				// set the data pointer
+				skb_put(skb, xdp.data_end - xdp.data);
 
-				skb_put_data(skb, data, len);
 				skb->protocol = eth_type_trans(skb, q->netdev);
 				skb->ip_summed = CHECKSUM_NONE;
 				skb_record_rx_queue(skb, qid);
@@ -405,7 +452,9 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 			}
 		}
 
-		//TODO: replace this with per-queue stats in order to avoid contention
+		// here the page where packet data was written has either been recycled or marked for recycling
+		onic_rx_page_refill(q);
+
 		pcpu_stats_pointer->rx_packets++;
 		pcpu_stats_pointer->rx_bytes += len;
 
@@ -656,20 +705,69 @@ static void onic_clear_rx_queue(struct onic_private *priv, u16 qid)
 
 	for (i = 0; i < real_count; ++i) {
 		struct page *pg = q->buffer[i].pg;
-		__free_pages(pg, 0);
+		// the third argument is "bool allow_direct", and it tells the allocator if the page was
+		// freed by the consumer, allow lockless caching.
+		// TODO: puttting to false shouldn't cause any problems, understand when to use true
+		page_pool_put_full_page(q->page_pool, pg,false);
 	}
 
 	if (q->buffer) kfree(q->buffer);
+	if (xdp_rxq_info_is_reg(&q->xdp_rxq))
+		xdp_rxq_info_unreg(&q->xdp_rxq);
+	page_pool_destroy(q->page_pool);
+	q->page_pool = NULL;
 	kfree(q);
 	priv->rx_queue[qid] = NULL;
 }
 
+
+static int onic_create_page_pool(struct onic_private *priv, struct onic_rx_queue *q, int size) {
+	struct bpf_prog *xdp_prog = READ_ONCE(priv->xdp_prog);
+	struct page_pool_params pp_params = {
+		.order = 0,
+		.flags = PP_FLAG_DMA_MAP | PP_FLAG_DMA_SYNC_DEV,
+		.pool_size = size,
+		.nid = dev_to_node(&priv->pdev->dev),
+		.dev = &priv->pdev->dev,
+		.dma_dir = xdp_prog ? DMA_BIDIRECTIONAL : DMA_FROM_DEVICE,
+		.offset = XDP_PACKET_HEADROOM,
+		.max_len = priv->netdev->mtu + ETH_HLEN,
+	};
+	int err;
+
+	q->page_pool = page_pool_create(&pp_params);
+	if (IS_ERR(q->page_pool)) {
+		err = PTR_ERR(q->page_pool);
+		q->page_pool = NULL;
+		return err;
+	}
+
+	err = xdp_rxq_info_reg(&q->xdp_rxq, priv->netdev, q->qid, 0);
+	if (err < 0)
+		goto err_free_pp;
+
+	err = xdp_rxq_info_reg_mem_model(&q->xdp_rxq, MEM_TYPE_PAGE_POOL,
+					 q->page_pool);
+	if (err)
+		goto err_unregister_rxq;
+
+	return 0;
+
+err_unregister_rxq:
+	xdp_rxq_info_unreg(&q->xdp_rxq);
+err_free_pp:
+	page_pool_destroy(q->page_pool);
+	q->page_pool = NULL;
+	return err;
+}
+
 static int onic_init_rx_queue(struct onic_private *priv, u16 qid)
 {
-	const u8 bufsz_idx = 13;
-	const u8 desc_rngcnt_idx = 13;
+	// TODO: make these configurable via ethtool
+	const u8 bufsz_idx = 8;
+	const u8 desc_rngcnt_idx = 8;
 	//const u8 cmpl_rngcnt_idx = 15;
-	const u8 cmpl_rngcnt_idx = 13;
+	const u8 cmpl_rngcnt_idx = 8;
 	struct net_device *dev = priv->netdev;
 	struct onic_rx_queue *q;
 	struct onic_ring *ring;
@@ -698,22 +796,6 @@ static int onic_init_rx_queue(struct onic_private *priv, u16 qid)
 
 	q->xdp_prog = priv->xdp_prog;
 
-	if (xdp_rxq_info_is_reg(&q->xdp_rxq))
-		xdp_rxq_info_unreg(&q->xdp_rxq);
-
-	rv = xdp_rxq_info_reg(&q->xdp_rxq, dev, qid, q->napi.napi_id);
-	if (rv < 0) {
-		netdev_err(dev, "Failed to register xdp_rxq index %u\n", q->qid);
-		return rv;
-	}
-
-	xdp_rxq_info_unreg_mem_model(&q->xdp_rxq);
-	rv = xdp_rxq_info_reg_mem_model(&q->xdp_rxq, MEM_TYPE_PAGE_SHARED, NULL);
-	if (rv < 0) {
-		netdev_err(dev, "Failed to register xdp_rxq memory model %u\n", q->qid);
-		return rv;
-	}
-
 	/* allocate DMA memory for RX descriptor ring */
 	ring = &q->desc_ring;
 	ring->count = onic_ring_count(desc_rngcnt_idx);
@@ -741,10 +823,16 @@ static int onic_init_rx_queue(struct onic_private *priv, u16 qid)
 		goto clear_rx_queue;
 	}
 
+	rv = onic_create_page_pool(priv, q, real_count);
+	if (rv < 0)
+		goto clear_rx_queue;
+	
+
 	for (i = 0; i < real_count; ++i) {
-		struct page *pg = dev_alloc_pages(0);
+		struct page *pg = page_pool_dev_alloc_pages(q->page_pool);
 
 		if (!pg) {
+			netdev_err(dev, "page_pool_dev_alloc_pages failed at %d", i);
 			rv = -ENOMEM;
 			goto clear_rx_queue;
 		}
@@ -760,11 +848,7 @@ static int onic_init_rx_queue(struct onic_private *priv, u16 qid)
 		struct page *pg = q->buffer[i].pg;
 		unsigned int offset = q->buffer[i].offset;
 
-		desc.dst_addr = dma_map_page(&priv->pdev->dev, pg, 0, PAGE_SIZE,
-					     DMA_FROM_DEVICE);
-		desc.dst_addr += offset;
-		q->buffer[i].dma_addr = desc.dst_addr;
-
+		desc.dst_addr = page_pool_get_dma_addr(pg) + offset;
 		qdma_pack_c2h_st_desc(desc_ptr, &desc);
 	}
 
@@ -1107,7 +1191,7 @@ int onic_xdp_xmit(struct net_device *dev, int n, struct xdp_frame **frames, u32 
 		int err;
 
 		err = 0;
-		err = onic_xmit_xdp_ring(priv, tx_queue, frame);
+		err = onic_xmit_xdp_ring(priv, tx_queue, frame,true);
 		if (err != ONIC_XDP_TX) {
 			xdp_return_frame_rx_napi(frame);
 			netdev_err(dev, "Failed to transmit frame");

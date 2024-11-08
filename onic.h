@@ -58,7 +58,6 @@ struct onic_tx_buffer {
 struct onic_rx_buffer {
 	struct page *pg;
 	unsigned int offset;
-	dma_addr_t dma_addr;
 	u64 time_stamp;
 };
 
@@ -103,6 +102,7 @@ struct onic_rx_queue {
 	struct napi_struct napi;
 	struct bpf_prog *xdp_prog;
 	struct xdp_rxq_info xdp_rxq;
+	struct page_pool *page_pool;
 
 	struct {
 		u64 xdp_redirect;
