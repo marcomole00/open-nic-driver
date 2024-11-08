@@ -406,23 +406,15 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 		
 		int len = cmpl.pkt_len;
 
+		xdp_init_buff(&xdp, PAGE_SIZE, &q->xdp_rxq);
+
 		dma_sync_single_for_cpu(&priv->pdev->dev,
 					page_pool_get_dma_addr(buf->pg) +
 						buf->offset,
 						len, DMA_FROM_DEVICE);
-    
-		// data is the pointer to the data in the page, and its being passed into the sk_buff struct
-		/* maximum packet size is 1514, less than the page size */
-		data = (u8 *)(page_address(buf->pg) + buf->offset);
-
-		xdp.data = page_address(buf->pg) + buf->offset;
-		xdp.rxq = &q->xdp_rxq;
-	 	//xdp.data = xdp.data; // data is the pointer to the data in the page, and its being passed into the sk_buff struct
-	 	xdp.data_end = xdp.data + len; // data + len is the pointer to the end of the data in the page, and its being passed into the sk_buff struct
-	 	xdp.data_hard_start = xdp.data - XDP_PACKET_HEADROOM; 
-		xdp.data_meta = xdp.data; 
-		xdp.frame_sz = PAGE_SIZE;
-
+   
+		xdp_prepare_buff(&xdp, page_address(buf->pg), buf->offset, len, false);
+		
 		res = onic_run_xdp(q, &xdp,priv);
 		if (IS_ERR(res)) {
 			unsigned int xdp_res = -PTR_ERR(res);
