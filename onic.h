@@ -95,7 +95,11 @@ struct onic_rx_queue {
 	struct net_device *netdev;
 	u16 qid;
 
-	struct onic_rx_buffer *buffer;
+	union {
+		struct onic_rx_buffer *buffer; // normal use
+		struct xdp_buff *xpds; // for af_xdp_zc
+	}
+	
 	struct onic_ring desc_ring;
 	struct onic_ring cmpl_ring;
 	struct onic_q_vector *vector;
