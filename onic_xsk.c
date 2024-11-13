@@ -106,18 +106,26 @@ int onic_run_xdp_zc(struct xdp_buff *xdp, struct onic_rx_queue *rx_queue)
 	return result;
 }
 
-struct sk_buff *onic_xsk_construct_skb(struct napi_struct *napi, void *data, u32 len)
+struct sk_buff *onic_xsk_construct_skb(struct napi_struct *napi, struct xdp_buff *xdp)
 {
 
 	struct sk_buff *skb;
-	skb = napi_alloc_skb(napi, len);
+	u32 meta_size = xdp->data - xdp->data_meta;
+	u32 data_size = xdp->data_end - xdp->data;
+	u32 length = xdp->data_end - xdp->data_hard_start;
+
+
+	skb = napi_alloc_skb(napi, length);
 	if (unlikely(!skb))
 	{
 		// report error via some counters i'll decide later
 		return NULL;
 	}
 
-	skb_put_data(skb, data, len);
+	skb_reserve(skb, xdp->data - xdp->data_hard_start);
+
+
+	skb_put_data(skb, xdp->data, data_size);
 	return skb;
 }
 
@@ -127,20 +135,28 @@ int onic_rx_consume_zc(struct onic_rx_queue *rx_queue, struct qdma_c2h_cmpl_stat
 	struct onic_private *priv = netdev_priv(rx_queue->netdev);
 	struct onic_ring *desc_ring = &rx_queue->desc_ring;
 	struct onic_ring *cmpl_ring = &rx_queue->cmpl_ring;
+	struct qdma_c2h_cmpl cmpl;
+	u8 *cmpl_ptr;
+
 	struct xdp_buff *xdp_buff;
 	int xdp_result;
+	int len;
 
 	while ((cmpl_ring->next_to_clean != cmpl_stat.pidx))
 	{
+		struct sk_buff *skb;
 		xdp_buff = rx_queue->xdps[desc_ring->next_to_clean];
 
-		// i have to manually set xdp data end by looking at the cpml pointer!!!!!
+		cmpl_ptr =
+			cmpl_ring->desc + QDMA_C2H_CMPL_SIZE * cmpl_ring->next_to_clean;
+
+		qdma_unpack_c2h_cmpl(&cmpl, cmpl_ptr);
+		len = cmpl.pkt_len;
+		xdp_buff->data_end = xdp_buff->data + len;
 
 		xsk_buff_dma_sync_for_cpu(xdp_buff, xsk_get_pool_from_qid(priv->netdev, rx_queue->qid));
 
 		xdp_result = onic_run_xdp_zc(xdp_buff, rx_queue);
-
-		// handle xdp result
 
 		if (xdp_result == ONIC_XDP_CONSUMED)
 		{
@@ -148,6 +164,7 @@ int onic_rx_consume_zc(struct onic_rx_queue *rx_queue, struct qdma_c2h_cmpl_stat
 		}
 		else if (xdp_result == ONIC_XDP_PASS)
 		{
+			skb = onic_xsk_construct_skb(napi, xdp);
 		}
 	}
 }
