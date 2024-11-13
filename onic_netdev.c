@@ -265,7 +265,6 @@ static void *onic_run_xdp(struct onic_rx_queue *rx_queue, struct xdp_buff *xdp_b
     case XDP_TX:
 			result = onic_xdp_xmit_back(rx_queue, xdp_buff);
 			if (result == ONIC_XDP_CONSUMED) {
-				page_pool_recycle_direct(rx_queue->page_pool, page);
 				goto out_failure;
 				}
 			break;
@@ -273,7 +272,6 @@ static void *onic_run_xdp(struct onic_rx_queue *rx_queue, struct xdp_buff *xdp_b
 			err = xdp_do_redirect(rx_queue->netdev, xdp_buff, xdp_prog);
 			if (err) {
 				result = ONIC_XDP_CONSUMED;
-				page_pool_recycle_direct(rx_queue->page_pool, page);
 				goto out_failure;
 			}
 			result = ONIC_XDP_REDIR;
@@ -284,14 +282,12 @@ static void *onic_run_xdp(struct onic_rx_queue *rx_queue, struct xdp_buff *xdp_b
     case XDP_TX:
 			result = onic_xdp_xmit_back(rx_queue, xdp_buff);
 			if (result == ONIC_XDP_CONSUMED)
-				page_pool_recycle_direct(rx_queue->page_pool, page);
 				goto out_failure;
 			break;
     case XDP_REDIRECT:
 			err = xdp_do_redirect(rx_queue->netdev, xdp_buff, xdp_prog);
 			if (err) {
 				ret = ONIC_XDP_CONSUMED;
-				page_pool_recycle_direct(rx_queue->page_pool, page);
 				goto out_failure;
 			}
 			result = ONIC_XDP_REDIR;
