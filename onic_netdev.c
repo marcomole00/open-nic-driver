@@ -203,10 +203,7 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
 
 	// This gets called only if version is >= 5.3.0 since we do not support
 	// TX/REDIR on older versions
-	if (onic_ring_full(ring) || !netdev_xmit_more()) {
-		wmb();
-		onic_set_tx_head(priv->hw.qdma, tx_queue->qid, ring->next_to_use);
-	}
+	
 
 	return ONIC_XDP_TX;
 }
@@ -214,7 +211,6 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
 static int onic_xdp_xmit_back(struct onic_rx_queue *q, struct xdp_buff *xdp_buff) {
 	struct onic_private *priv = netdev_priv(q->netdev);
 	struct xdp_frame *xdpf = xdp_convert_buff_to_frame(xdp_buff);
-	struct onic_ring *tx_ring;
 	struct onic_tx_queue *tx_queue;
 	struct netdev_queue *nq;
 	u32 ret = 0, cpu = smp_processor_id();
@@ -230,12 +226,15 @@ static int onic_xdp_xmit_back(struct onic_rx_queue *q, struct xdp_buff *xdp_buff
 		return -ENXIO;
 	}
 
-	tx_ring = &tx_queue->ring;
 	nq = netdev_get_tx_queue(tx_queue->netdev, tx_queue->qid);
 
 	__netif_tx_lock(nq, cpu);
 	ret = onic_xmit_xdp_ring(priv, tx_queue, xdpf,false);
 	q->xdp_rx_stats.xdp_tx++;
+
+	wmb();
+	onic_set_tx_head(priv->hw.qdma, tx_queue->qid, tx_queue->ring.next_to_use);
+
 	__netif_tx_unlock(nq);
 
 	return ret;
@@ -1165,13 +1164,6 @@ int onic_xdp_xmit(struct net_device *dev, int n, struct xdp_frame **frames, u32 
 
 	tx_queue =  onic_xdp_tx_queue_mapping(priv);
 
-	if (!priv->xdp_prog) {
-		netdev_err(dev, "No XDP program");
-		tx_queue->xdp_tx_stats.xdp_xmit_err++;
-		return -ENXIO;
-	}
-
-
 	if (unlikely(flags & ~XDP_XMIT_FLAGS_MASK)){
 			netdev_err(dev, "Invalid flags");
 		tx_queue->xdp_tx_stats.xdp_xmit_err++;
@@ -1187,7 +1179,7 @@ int onic_xdp_xmit(struct net_device *dev, int n, struct xdp_frame **frames, u32 
 		int err;
 
 		err = 0;
-		err = onic_xmit_xdp_ring(priv, tx_queue, frame,true);
+		err = onic_xmit_xdp_ring(priv, tx_queue, frame, true);
 		if (err != ONIC_XDP_TX) {
 			xdp_return_frame_rx_napi(frame);
 			netdev_err(dev, "Failed to transmit frame");
@@ -1197,7 +1189,14 @@ int onic_xdp_xmit(struct net_device *dev, int n, struct xdp_frame **frames, u32 
 			tx_queue->xdp_tx_stats.xdp_xmit++;
 		}
 	}
+
+	if (flags & XDP_XMIT_FLUSH) {
+		wmb();
+		onic_set_tx_head(priv->hw.qdma, tx_queue->qid, tx_queue->ring.next_to_use);
+	}
 	__netif_tx_unlock(nq);
+
+
 
 	return n - drops;
 }
