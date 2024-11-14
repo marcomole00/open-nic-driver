@@ -110,10 +110,8 @@ struct sk_buff *onic_xsk_construct_skb(struct napi_struct *napi, struct xdp_buff
 {
 
 	struct sk_buff *skb;
-	u32 meta_size = xdp->data - xdp->data_meta;
 	u32 data_size = xdp->data_end - xdp->data;
 	u32 length = xdp->data_end - xdp->data_hard_start;
-
 
 	skb = napi_alloc_skb(napi, length);
 	if (unlikely(!skb))
@@ -124,8 +122,9 @@ struct sk_buff *onic_xsk_construct_skb(struct napi_struct *napi, struct xdp_buff
 
 	skb_reserve(skb, xdp->data - xdp->data_hard_start);
 
-
 	skb_put_data(skb, xdp->data, data_size);
+	skb->protocol = eth_type_trans(skb, q->netdev);
+	skb->ip_summed = CHECKSUM_NONE;
 	return skb;
 }
 
@@ -136,11 +135,12 @@ int onic_rx_consume_zc(struct onic_rx_queue *rx_queue, struct qdma_c2h_cmpl_stat
 	struct onic_ring *desc_ring = &rx_queue->desc_ring;
 	struct onic_ring *cmpl_ring = &rx_queue->cmpl_ring;
 	struct qdma_c2h_cmpl cmpl;
+	struct napi_struct *napi = &rx_queue->napi;
 	u8 *cmpl_ptr;
 
 	struct xdp_buff *xdp_buff;
 	int xdp_result;
-	int len;
+	int len, err;
 
 	while ((cmpl_ring->next_to_clean != cmpl_stat.pidx))
 	{
@@ -164,7 +164,18 @@ int onic_rx_consume_zc(struct onic_rx_queue *rx_queue, struct qdma_c2h_cmpl_stat
 		}
 		else if (xdp_result == ONIC_XDP_PASS)
 		{
-			skb = onic_xsk_construct_skb(napi, xdp);
+			skb = onic_xsk_construct_skb(napi, xdp_buff);
+			if (skb)
+			{
+				skb_record_rx_queue(skb, rx_queue->qid);
+				err = napi_gro_receive(napi, skb);
+				if (err < 0)
+				{
+					netdev_err(q->netdev, "napi_gro_receive, err = %d", rv);
+				}
+				
+			}
+			
 		}
 	}
 }
