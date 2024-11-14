@@ -519,8 +519,7 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 				cmpl.color);
 	}
 
-	if (xdp_xmit & ONIC_XDP_REDIR)
-		xdp_do_flush();
+
 
 	if (cmpl_ring->next_to_clean == cmpl_stat.pidx) {
 		if (debug)
@@ -554,6 +553,9 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 	}
 
 out_of_budget:
+	if (xdp_xmit & ONIC_XDP_REDIR)
+		xdp_do_flush();
+
 	if (debug)
 		netdev_info(q->netdev, "rx_poll is done");
 	if (debug)
