@@ -84,6 +84,7 @@ struct onic_tx_queue {
 	struct onic_tx_buffer *buffer;
 	struct onic_ring ring;
 	struct onic_q_vector *vector;
+	struct xsk_buff_pool *xsk_pool;
 
 	struct {
 		u64	xdp_xmit;
@@ -108,6 +109,7 @@ struct onic_rx_queue {
 	struct bpf_prog *xdp_prog;
 	struct xdp_rxq_info xdp_rxq;
 	struct page_pool *page_pool;
+	struct xsk_buff_pool *xsk_pool;
 
 	struct {
 		u64 xdp_redirect;

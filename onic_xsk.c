@@ -175,7 +175,7 @@ int onic_rx_consume_zc(struct onic_rx_queue *rx_queue, struct qdma_c2h_cmpl_stat
 				}
 				
 			}
-			
+
 		}
 	}
 }
@@ -209,6 +209,9 @@ static int onic_xsk_pool_enable(struct onic_private *priv, struct xsk_buff_pool 
 
 	set_bit(qid, priv->af_xdp_zc_qps);
 
+	priv->rx_queue[qid]->xsk_pool = pool;
+	priv->tx_queue[qid]->xsk_pool = pool;
+
 	if_running = netif_running(priv->netdev);
 
 	if (if_running)
@@ -233,4 +236,26 @@ int onic_xsk_pool_setup(struct onic_private *priv, struct xsk_buff_pool *pool, u
 {
 
 	return pool = onic_xsk_pool_enable(priv, pool, qid) : onic_xsk_pool_disable(priv, qid);
+}
+
+
+
+int onic_queue_pair_disable(struct onic_private *priv, u16 qid) {
+
+	int real_count = onic_ring_get_real_count(&priv->rx_queue[qid]->ring);
+	// disable interrupts for the queue
+	onic_disable_q_vector(priv->q_vector[qid]);
+	// disable napi (if there is a napi instance running this will block until it is done)
+	napi_disable(&priv->rx_queue[qid]->napi);
+
+	if (priv->rx_queue[qid]->xdp_rxq.
+	}
+
+	// deallocate the buffers
+	for (int i = 0; i < real_count; i++) {
+		
+	}
+
+
+	
 }

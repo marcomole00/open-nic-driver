@@ -280,13 +280,3 @@ void onic_enable_q_vector(struct onic_q_vector *vec)
 	// enable the queue vector interrupt
 	enable_irq(pci_irq_vector(vec->priv->pdev, vec->vid));
 }
-
-
-int onic_queue_pair_disable(struct onic_private *priv, u16 qid){
-	return -1;
-}
-
-int onic_queue_pair_enable(struct onic_private *priv, u16 qid);
-{
-	return -1;
-}
