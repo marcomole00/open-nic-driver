@@ -63,6 +63,8 @@ static void onic_tx_clean(struct onic_tx_queue *q)
 	struct qdma_wb_stat wb;
 	int work, i;
 
+	// this is a locking mechanism to guarantee that only one thread is cleaning the ring
+	// bitmask functions are atomic!
 	if (test_and_set_bit(0, q->state))
 		return;
 
@@ -80,13 +82,21 @@ static void onic_tx_clean(struct onic_tx_queue *q)
 	for (i = 0; i < work; ++i) {
 		struct onic_tx_buffer *buf = &q->buffer[ring->next_to_clean];
 
-		dma_unmap_single(&priv->pdev->dev, buf->dma_addr, buf->len, DMA_TO_DEVICE);
 
-		if (buf->type == ONIC_TX_BUF_TYPE_SKB) {
+		if (buf->type == ONIC_TX_SKB) {
+			// The packet originated from the kernel network stack
+			dma_unmap_single(&priv->pdev->dev, buf->dma_addr, buf->len, DMA_TO_DEVICE);
 			dev_kfree_skb_any(buf->skb);
-		}  else if (buf->type == ONIC_TX_BUF_TYPE_XDP) {
-			xdp_return_frame_rx_napi(buf->xdpf);
-		} else {
+		}  else if (buf->type == ONIC_TX_XDPF) {
+			// The packet originated from a XDP_TX -> It comes from a page pool, no need to dma unmap
+			xdp_return_frame(buf->xdpf);
+		} else if (buf->type == ONIC_TX_XDPF_XMIT) {
+			// The packet originated from the XDP program of another driver. 
+			// It was mapped to a DMA address and needs to be unmapped
+			dma_unmap_single(&priv->pdev->dev, buf->dma_addr, buf->len, DMA_TO_DEVICE);
+			xdp_return_frame(buf->xdpf);
+		}
+		 else {
 			netdev_err(priv->netdev, "unknown buffer type %d\n", buf->type);
 		}
 
@@ -156,6 +166,7 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
   	struct qdma_h2c_st_desc desc;
 	bool debug = 1;
 	struct rtnl_link_stats64 *pcpu_stats_pointer;
+	enum onic_tx_buf_type type;
 
 	ring = &tx_queue->ring;
 	
@@ -170,6 +181,7 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
 	if (dma_map) {
 		/* ndo_xdp_dmit */
 		dma_addr = dma_map_single(&priv->pdev->dev, xdpf->data,xdpf->len, DMA_TO_DEVICE);
+		type = ONIC_TX_XDPF_XMIT;
 		if (unlikely(dma_mapping_error(&priv->pdev->dev, dma_addr)))
 			return ONIC_XDP_CONSUMED;
 	} else {
@@ -179,6 +191,7 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
 		dma_addr = page_pool_get_dma_addr(page) + sizeof(*xdpf) + xdpf->headroom;
 		dma_sync_single_for_device(&priv->pdev->dev, dma_addr,
 					   xdpf->len, DMA_BIDIRECTIONAL);
+		type = ONIC_TX_XDPF;
 		
 	}
 
@@ -191,7 +204,7 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
 	qdma_pack_h2c_st_desc(desc_ptr, &desc);
 
 	tx_queue->buffer[ring->next_to_use].xdpf = xdpf;
-	tx_queue->buffer[ring->next_to_use].type = ONIC_TX_BUF_TYPE_XDP;
+	tx_queue->buffer[ring->next_to_use].type = type;
 	tx_queue->buffer[ring->next_to_use].dma_addr = dma_addr;
 	tx_queue->buffer[ring->next_to_use].len = xdpf->len;
 	
@@ -447,6 +460,7 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 			}
 		}
 
+
 		// here the page where packet data was written has either been recycled or marked for recycling
 		onic_rx_page_refill(q);
 
@@ -577,6 +591,8 @@ static void onic_clear_tx_queue(struct onic_private *priv, u16 qid)
 	if (!q)
 		return;
 
+	onic_tx_clean(q);
+
 	onic_qdma_clear_tx_queue(priv->hw.qdma, qid);
 
 	ring = &q->ring;
@@ -705,7 +721,7 @@ static void onic_clear_rx_queue(struct onic_private *priv, u16 qid)
 		// the third argument is "bool allow_direct", and it tells the allocator if the page was
 		// freed by the consumer, allow lockless caching.
 		// TODO: puttting to false shouldn't cause any problems, understand when to use true
-		page_pool_put_full_page(q->page_pool, pg,false);
+		page_pool_put_full_page(q->page_pool, pg, false);
 	}
 
 	if (q->buffer) kfree(q->buffer);
@@ -1037,7 +1053,7 @@ netdev_tx_t onic_xmit_frame(struct sk_buff *skb, struct net_device *dev)
 	desc.metadata = skb->len;
 	qdma_pack_h2c_st_desc(desc_ptr, &desc);
 
-	q->buffer[ring->next_to_use].type = ONIC_TX_BUF_TYPE_SKB;
+	q->buffer[ring->next_to_use].type = ONIC_TX_SKB;
 	q->buffer[ring->next_to_use].skb = skb;
 	q->buffer[ring->next_to_use].dma_addr = dma_addr;
 	q->buffer[ring->next_to_use].len = skb->len;
