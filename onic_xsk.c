@@ -209,9 +209,6 @@ static int onic_xsk_pool_enable(struct onic_private *priv, struct xsk_buff_pool 
 
 	set_bit(qid, priv->af_xdp_zc_qps);
 
-	priv->rx_queue[qid]->xsk_pool = pool;
-	priv->tx_queue[qid]->xsk_pool = pool;
-
 	if_running = netif_running(priv->netdev);
 
 	if (if_running)
@@ -242,20 +239,37 @@ int onic_xsk_pool_setup(struct onic_private *priv, struct xsk_buff_pool *pool, u
 
 int onic_queue_pair_disable(struct onic_private *priv, u16 qid) {
 
+	struct onic_rx_queue *rx_queue = priv->rx_queue[qid];
 	int real_count = onic_ring_get_real_count(&priv->rx_queue[qid]->ring);
+	struct netdev_queue *txq = netdev_get_tx_queue(priv->dev, qid);
 	// disable interrupts for the queue
 	onic_disable_q_vector(priv->q_vector[qid]);
 	// disable napi (if there is a napi instance running this will block until it is done)
 	napi_disable(&priv->rx_queue[qid]->napi);
 
-	if (priv->rx_queue[qid]->xdp_rxq.
-	}
+	// after disabling the napi i have a doubt: do i have to consume the packets that may be still in the queue ,something like 
+	// gro_receive (here we're not in napi context) ? Or i just de alloc all the pages and i ignore the question.
+	// for now i'll go with the second option.
 
-	// deallocate the buffers
-	for (int i = 0; i < real_count; i++) {
-		
-	}
+	netif_tx_stop_queue(txq);
 
-
+	onic_tx_clean(priv, qid);
+	onic_clear_rx_queue(priv, qid);
+	onic_clear_tx_queue(priv, qid);
 	
+}
+
+int onic_queue_pair_enable(struct onic_private *priv, u16 qid) {
+	
+	struct onic_rx_queue *rx_queue = priv->rx_queue[qid];
+	int real_count = onic_ring_get_real_count(&priv->rx_queue[qid]->ring);
+	struct netdev_queue *txq = netdev_get_tx_queue(priv->dev, qid);
+
+	onic_init_rx_queue(priv, qid);
+	onic_init_tx_queue(priv, qid);
+
+	netif_tx_wake_queue(txq);
+	napi_enable(&priv->rx_queue[qid]->napi);
+	onic_enable_q_vector(priv->q_vector[qid]);
+
 }

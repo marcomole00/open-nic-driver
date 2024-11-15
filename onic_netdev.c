@@ -24,6 +24,8 @@
 #include <linux/filter.h>
 #include <linux/bpf_trace.h>
 #include <net/page_pool.h>
+#include <net/xdp_sock_drv.h>
+#include <net/xsk_buff_pool.h>
 
 #include "onic_netdev.h"
 #include "onic_hardware.h"
@@ -671,6 +673,15 @@ static int onic_init_tx_queue(struct onic_private *priv, u16 qid)
 	netdev_info(dev, "TX queue %d, ring count %d, ring size %d, real_count %d", 
 		    qid, ring->count, size, real_count);
 
+	if (test_bit(priv->af_xdp_zc_qps)) {
+		q->xsk_pool = xsk_get_pool_from_qid(priv->netdev, qid);
+		if (!q->xsk_pool) {
+			rv = -ENOMEM;
+			netdev_err(dev, "fatal error in setting up the tx queue %d, xsk_pool is NULL", qid);
+			goto clear_tx_queue;
+		}
+	}
+
 	/* initialize TX buffers */
 	q->buffer =
 		kcalloc(real_count, sizeof(struct onic_tx_buffer), GFP_KERNEL);
@@ -729,20 +740,28 @@ static void onic_clear_rx_queue(struct onic_private *priv, u16 qid)
 				  ring->dma_addr);
 
 	for (i = 0; i < real_count; ++i) {
-		struct page *pg = q->buffer[i].pg;
-		// the third argument is "bool allow_direct", and it tells the allocator if the page was
-		// freed by the consumer, allow lockless caching.
-		// TODO: puttting to false shouldn't cause any problems, understand when to use true
-		page_pool_put_full_page(q->page_pool, pg, false);
+		
+		if (q->page_pool){
+			struct page *pg = q->buffer[i].pg;
+			page_pool_put_full_page(q->page_pool, pg, false);
+		} else if (q->xsk_pool) {
+			struct xdp_buff *xdp_buff = q->xpds[i];
+			xsk_buff_free(xdp_buff);
+		}
 	}
 
-	if (q->buffer) kfree(q->buffer);
+	if(q->page_pool){
+		if (q->buffer) kfree(q->buffer);
+		page_pool_destroy(q->page_pool);
+		q->page_pool = NULL;
+		kfree(q);
+		priv->rx_queue[qid] = NULL;
+	}
+	
+	
 	if (xdp_rxq_info_is_reg(&q->xdp_rxq))
 		xdp_rxq_info_unreg(&q->xdp_rxq);
-	page_pool_destroy(q->page_pool);
-	q->page_pool = NULL;
-	kfree(q);
-	priv->rx_queue[qid] = NULL;
+	
 }
 
 
@@ -840,42 +859,78 @@ static int onic_init_rx_queue(struct onic_private *priv, u16 qid)
 	ring->next_to_clean = 0;
 	ring->color = 0;
 
-	/* initialize RX buffers */
-	q->buffer =
-		kcalloc(real_count, sizeof(struct onic_rx_buffer), GFP_KERNEL);
-	if (!q->buffer) {
-		rv = -ENOMEM;
-		goto clear_rx_queue;
-	}
+	if (test_bit(qid, priv->af_xdp_zc_qps)) {
+		q->xsk_pool = xsk_get_pool_from_qid(priv->dev, qid);
+		if (!q->xsk_pool) {
+			rv = -ENOMEM;
+			netdev_err("fatal error: xsk_pool is NULL at queue %d but the state bit is set", qid);
+			goto clear_rx_queue;
+		}
 
-	rv = onic_create_page_pool(priv, q, real_count);
-	if (rv < 0)
-		goto clear_rx_queue;
-	
-
-	for (i = 0; i < real_count; ++i) {
-		struct page *pg = page_pool_dev_alloc_pages(q->page_pool);
-
-		if (!pg) {
-			netdev_err(dev, "page_pool_dev_alloc_pages failed at %d", i);
+		// af_xdp zero copy allocator stuff
+		q->xdps = kcalloc(real_count, sizeof(struct xdp_buff *), GFP_KERNEL);
+		if (!q->xdps) {
 			rv = -ENOMEM;
 			goto clear_rx_queue;
 		}
 
-		q->buffer[i].pg = pg;
-		q->buffer[i].offset = XDP_PACKET_HEADROOM;
+		for (i = 0; i < real_count; ++i) {
+			q->xdps[i] = xsk_buff_alloc(q->xsk_pool, GFP_KERNEL);
+			if (!q->xdps[i]) {
+				rv = -ENOMEM;
+				goto clear_rx_queue;
+			}
+		}
+
+		for (i=0; i < real_count; ++i) {
+
+			u8 *desc_ptr = ring->desc + QDMA_C2H_ST_DESC_SIZE * i;
+			struct qdma_c2h_st_desc desc;
+			desc.dst_addr = xsk_buff_dma_addr(q->xdps[i]);
+			qdma_pack_c2h_st_desc(desc_ptr, &desc);
+
+		}
+	} else {
+		// normal page pool stuff
+		/* initialize RX buffers */
+		q->buffer =
+			kcalloc(real_count, sizeof(struct onic_rx_buffer), GFP_KERNEL);
+		if (!q->buffer) {
+			rv = -ENOMEM;
+			goto clear_rx_queue;
+		}
+
+		rv = onic_create_page_pool(priv, q, real_count);
+		if (rv < 0)
+			goto clear_rx_queue;
+		
+
+		for (i = 0; i < real_count; ++i) {
+			struct page *pg = page_pool_dev_alloc_pages(q->page_pool);
+
+			if (!pg) {
+				netdev_err(dev, "page_pool_dev_alloc_pages failed at %d", i);
+				rv = -ENOMEM;
+				goto clear_rx_queue;
+			}
+
+			q->buffer[i].pg = pg;
+			q->buffer[i].offset = XDP_PACKET_HEADROOM;
+		}
+
+		/* map pages and initialize descriptors */
+		for (i = 0; i < real_count; ++i) {
+			u8 *desc_ptr = ring->desc + QDMA_C2H_ST_DESC_SIZE * i;
+			struct qdma_c2h_st_desc desc;
+			struct page *pg = q->buffer[i].pg;
+			unsigned int offset = q->buffer[i].offset;
+
+			desc.dst_addr = page_pool_get_dma_addr(pg) + offset;
+			qdma_pack_c2h_st_desc(desc_ptr, &desc);
+		}
+
 	}
 
-	/* map pages and initialize descriptors */
-	for (i = 0; i < real_count; ++i) {
-		u8 *desc_ptr = ring->desc + QDMA_C2H_ST_DESC_SIZE * i;
-		struct qdma_c2h_st_desc desc;
-		struct page *pg = q->buffer[i].pg;
-		unsigned int offset = q->buffer[i].offset;
-
-		desc.dst_addr = page_pool_get_dma_addr(pg) + offset;
-		qdma_pack_c2h_st_desc(desc_ptr, &desc);
-	}
 
 	/* allocate DMA memory for completion ring */
 	ring = &q->cmpl_ring;
