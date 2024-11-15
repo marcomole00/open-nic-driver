@@ -87,14 +87,17 @@ static void onic_tx_clean(struct onic_tx_queue *q)
 			// The packet originated from the kernel network stack
 			dma_unmap_single(&priv->pdev->dev, buf->dma_addr, buf->len, DMA_TO_DEVICE);
 			dev_kfree_skb_any(buf->skb);
+			buf->skb = NULL;
 		}  else if (buf->type == ONIC_TX_XDPF) {
 			// The packet originated from a XDP_TX -> It comes from a page pool, no need to dma unmap
 			xdp_return_frame(buf->xdpf);
+			buf->xdpf = NULL;
 		} else if (buf->type == ONIC_TX_XDPF_XMIT) {
 			// The packet originated from the XDP program of another driver. 
 			// It was mapped to a DMA address and needs to be unmapped
 			dma_unmap_single(&priv->pdev->dev, buf->dma_addr, buf->len, DMA_TO_DEVICE);
 			xdp_return_frame(buf->xdpf);
+			buf->xdpf = NULL;
 		}
 		 else {
 			netdev_err(priv->netdev, "unknown buffer type %d\n", buf->type);
@@ -585,6 +588,7 @@ static void onic_clear_tx_queue(struct onic_private *priv, u16 qid)
 	struct onic_ring *ring;
 	u32 size;
 	int real_count;
+	int i;
 
 	if (!q)
 		return;
@@ -597,6 +601,14 @@ static void onic_clear_tx_queue(struct onic_private *priv, u16 qid)
 	real_count = ring->count - 1;
 	size = QDMA_H2C_ST_DESC_SIZE * real_count + QDMA_WB_STAT_SIZE;
 	size = ALIGN(size, PAGE_SIZE);
+
+	for (i = 0; i < real_count; ++i) {
+		if ((q->buffer[i].type & ONIC_TX_SKB ) && q->buffer[i].skb) {
+			netdev_err(priv->netdev, "Weird, skb is not NULL\n");
+		} else if ((q->buffer[i].type & (ONIC_TX_XDPF || ONIC_TX_XDPF_XMIT)) && q->buffer[i].xdpf) {
+			netdev_err(priv->netdev, "Weird, skb is not NULL\n");
+		}
+	}
 
 	if (ring->desc)
 		dma_free_coherent(&priv->pdev->dev, size, ring->desc,

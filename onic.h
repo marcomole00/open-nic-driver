@@ -40,9 +40,9 @@
 #define ONIC_XDP_REDIR    	BIT(3)
 
 enum onic_tx_buf_type {
-	ONIC_TX_SKB = 0,
-	ONIC_TX_XDPF = 1,
-	ONIC_TX_XDPF_XMIT = 2,
+	ONIC_TX_SKB = BIT(0),
+	ONIC_TX_XDPF = BIT(1),
+	ONIC_TX_XDPF_XMIT = BIT(2),
 };
 
 struct onic_tx_buffer {
