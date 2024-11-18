@@ -15,6 +15,8 @@ int onic_alloc_rx_xpds(struct onic_rx_queue *rx_queue)
 	return rx_queue->xdps ? 0 : -ENOMEM;
 }
 
+
+
 bool onic_alloc_rx_buffers_zc(struct onic_rx_queue *rx_queue, u16 count)
 {
 
@@ -54,7 +56,7 @@ no_buffers:
 	return ret;
 }
 
-int onic_run_xdp_zc(struct xdp_buff *xdp, struct onic_rx_queue *rx_queue)
+int onic_run_xdp_zc( struct onic_rx_queue *rx_queue, struct xdp_buff *xdp_buff)
 {
 
 	u32 act;
@@ -69,11 +71,11 @@ int onic_run_xdp_zc(struct xdp_buff *xdp, struct onic_rx_queue *rx_queue)
 		netdev_err(rx_queue->netdev, "XDP program not loaded for AF_XDP_ZC\n");
 	}
 
-	act = bpf_prog_run_xdp(xdp_prog, xdp);
+	act = bpf_prog_run_xdp(xdp_prog, xdp_buff);
 
 	if (likely(act == XDP_REDIRECT))
 	{
-		err = xdp_do_redirect(rx_queue->netdev, xdp, xdp_prog);
+		err = xdp_do_redirect(rx_queue->netdev, xdp_buff, xdp_prog);
 		if (err)
 			goto failure;
 		return ONIC_XDP_REDIR;
@@ -128,57 +130,6 @@ struct sk_buff *onic_xsk_construct_skb(struct napi_struct *napi, struct xdp_buff
 	return skb;
 }
 
-int onic_rx_consume_zc(struct onic_rx_queue *rx_queue, struct qdma_c2h_cmpl_stat cmpl_stat)
-{
-
-	struct onic_private *priv = netdev_priv(rx_queue->netdev);
-	struct onic_ring *desc_ring = &rx_queue->desc_ring;
-	struct onic_ring *cmpl_ring = &rx_queue->cmpl_ring;
-	struct qdma_c2h_cmpl cmpl;
-	struct napi_struct *napi = &rx_queue->napi;
-	u8 *cmpl_ptr;
-
-	struct xdp_buff *xdp_buff;
-	int xdp_result;
-	int len, err;
-
-	while ((cmpl_ring->next_to_clean != cmpl_stat.pidx))
-	{
-		struct sk_buff *skb;
-		xdp_buff = rx_queue->xdps[desc_ring->next_to_clean];
-
-		cmpl_ptr =
-			cmpl_ring->desc + QDMA_C2H_CMPL_SIZE * cmpl_ring->next_to_clean;
-
-		qdma_unpack_c2h_cmpl(&cmpl, cmpl_ptr);
-		len = cmpl.pkt_len;
-		xdp_buff->data_end = xdp_buff->data + len;
-
-		xsk_buff_dma_sync_for_cpu(xdp_buff, xsk_get_pool_from_qid(priv->netdev, rx_queue->qid));
-
-		xdp_result = onic_run_xdp_zc(xdp_buff, rx_queue);
-
-		if (xdp_result == ONIC_XDP_CONSUMED)
-		{
-			xsk_buff_free(xdp_buff);
-		}
-		else if (xdp_result == ONIC_XDP_PASS)
-		{
-			skb = onic_xsk_construct_skb(napi, xdp_buff);
-			if (skb)
-			{
-				skb_record_rx_queue(skb, rx_queue->qid);
-				err = napi_gro_receive(napi, skb);
-				if (err < 0)
-				{
-					netdev_err(q->netdev, "napi_gro_receive, err = %d", rv);
-				}
-				
-			}
-
-		}
-	}
-}
 
 static int onic_xsk_wakeup(struct net_device *dev, u16 qid, u32 flags)
 {
@@ -265,11 +216,11 @@ int onic_queue_pair_enable(struct onic_private *priv, u16 qid) {
 	int real_count = onic_ring_get_real_count(&priv->rx_queue[qid]->ring);
 	struct netdev_queue *txq = netdev_get_tx_queue(priv->dev, qid);
 
+	// this already enables napi
 	onic_init_rx_queue(priv, qid);
 	onic_init_tx_queue(priv, qid);
 
 	netif_tx_wake_queue(txq);
-	napi_enable(&priv->rx_queue[qid]->napi);
 	onic_enable_q_vector(priv->q_vector[qid]);
 
 }

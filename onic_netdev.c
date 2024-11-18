@@ -135,21 +135,44 @@ static void onic_rx_refill(struct onic_rx_queue *q)
 
 }
 
+//TODO: think about what to do in case of failures in memory allocation
+// a solution could be to keep a buffer of unfilled descriptors, fill the buffer whenever there is a memory allocation
+// failure and in later instances of page refill try to populate also the old ones.
 static void onic_rx_page_refill(struct onic_rx_queue *q)
 {
 	struct onic_ring *desc_ring = &q->desc_ring;
 	struct qdma_c2h_st_desc desc;
-	struct page *pg;
 	u8 *desc_ptr = desc_ring->desc + QDMA_C2H_ST_DESC_SIZE * desc_ring->next_to_clean;
 
-	// TODO: this may fail , handle this case
-	pg = page_pool_dev_alloc_pages(q->page_pool);
+	if (q->xsk_pool)
+	{
+		struct xdp_buff *xdp_buff;
+		xdp_buff = xsk_buff_alloc(q->xsk_pool);
+		if (!xdp_buff)
+		{
+			netdev_err(q->netdev, "xsk_buff_alloc failed\n");
+			// this is a problem
+			return;
+		}
+		q->xdps[desc_ring->next_to_clean] = xdp_buff;
+		desc.dst_addr = xsk_buff_get_dma(xdp_buff);
+	}
+	else
+	{
+		struct page *pg;
+		// TODO: this may fail , handle this case
+		pg = page_pool_dev_alloc_pages(q->page_pool);
+		if (!pg) {
+			netdev_err(q->netdev, "page_pool_dev_alloc_pages failed\n");
+			return;
+		}
 
-	q->buffer[desc_ring->next_to_clean].pg = pg;
-	q->buffer[desc_ring->next_to_clean].offset = XDP_PACKET_HEADROOM;
+		q->buffer[desc_ring->next_to_clean].pg = pg;
+		q->buffer[desc_ring->next_to_clean].offset = XDP_PACKET_HEADROOM;
 
+		desc.dst_addr = page_pool_get_dma_addr(pg) + XDP_PACKET_HEADROOM;
+	}
 
-	desc.dst_addr = page_pool_get_dma_addr(pg) + XDP_PACKET_HEADROOM;
 	qdma_pack_c2h_st_desc(desc_ptr, &desc);
 }
 
@@ -258,7 +281,7 @@ static int onic_xdp_xmit_back(struct onic_rx_queue *q, struct xdp_buff *xdp_buff
 	return ret;
 }
 
-static void *onic_run_xdp(struct onic_rx_queue *rx_queue, struct xdp_buff *xdp_buff, struct onic_private *priv) {
+static void *onic_run_xdp(struct onic_rx_queue *rx_queue, struct xdp_buff *xdp_buff) {
 	int err, result = ONIC_XDP_PASS;
 	struct bpf_prog *xdp_prog;
 	u32 act;
@@ -412,61 +435,100 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 	}
 
 	// main processing loop for rx_poll
-	while ((cmpl_ring->next_to_clean != cmpl_stat.pidx)) {
-		struct onic_rx_buffer *buf =
-			&q->buffer[desc_ring->next_to_clean];
-		struct sk_buff *skb;
+	while ((cmpl_ring->next_to_clean != cmpl_stat.pidx))
+	{
 		
+		struct sk_buff *skb;
+		int xdp_result;
+
 		int len = cmpl.pkt_len;
 
-		xdp_init_buff(&xdp, PAGE_SIZE, &q->xdp_rxq);
-
-		dma_sync_single_for_cpu(&priv->pdev->dev,
-					page_pool_get_dma_addr(buf->pg) +
-						buf->offset,
-						len, DMA_FROM_DEVICE);
-   
-		xdp_prepare_buff(&xdp, page_address(buf->pg), buf->offset, len, false);
-		
-		res = onic_run_xdp(q, &xdp,priv);
-		if (IS_ERR(res)) {
-			unsigned int xdp_res = -PTR_ERR(res);
-
-			if (xdp_res & (ONIC_XDP_TX | ONIC_XDP_REDIR)) {
-				xdp_xmit |= xdp_res;
+		if (q->xsk_pool)
+		{
+			struct xdp_buff *xdp_buff = q->xdps[desc_ring->next_to_clean];
+			// todo copy from consume_zc
+			xdp_buff->data_end = xdp_buff->data + len;
+			xsk_buff_dma_sync_for_cpu(xdp_buff, q->xsk_pool);
+			xdp_result = onic_run_xdp_zc(q, xdp_buff);
+			if (xdp_result == ONIC_XDP_CONSUMED)
+			{
+				xsk_buff_free(xdp_buff);
 			}
-
-			// Allocate skb only if we are continuing to process the packet
-			if (xdp_res & ONIC_XDP_PASS) {
-				
-				// allocate a new skb structure around the data 
-				skb = napi_build_skb(xdp.data_hard_start, PAGE_SIZE);
-
-				if (!skb) {
-					rv = -ENOMEM;
-					break;
+			else if (xdp_result == ONIC_XDP_PASS)
+			{
+				skb = onic_xsk_construct_skb(napi, xdp_buff);
+				if (skb)
+				{
+					skb_record_rx_queue(skb, rx_queue->qid);
+					err = napi_gro_receive(napi, skb);
+					if (err < 0)
+					{
+						netdev_err(q->netdev, "napi_gro_receive, err = %d", rv);
+					}
 				}
-				
-				// mark the skb for page_pool recycling
-				skb_mark_for_recycle(skb);
-				// reserve space in the skb for the data for the xdp headroom
-				skb_reserve(skb, xdp.data - xdp.data_hard_start);
-				// set the data pointer
-				skb_put(skb, xdp.data_end - xdp.data);
+			}
+		}
+		else
+		{
 
-				skb->protocol = eth_type_trans(skb, q->netdev);
-				skb->ip_summed = CHECKSUM_NONE;
-				skb_record_rx_queue(skb, qid);
-				rv = napi_gro_receive(napi, skb);
-				if (rv < 0) {
-					netdev_err(q->netdev, "napi_gro_receive, err = %d", rv);
-					break;
+			struct onic_rx_buffer *buf =
+			&q->buffer[desc_ring->next_to_clean];
+			xdp_init_buff(&xdp, PAGE_SIZE, &q->xdp_rxq);
+
+			dma_sync_single_for_cpu(&priv->pdev->dev,
+									page_pool_get_dma_addr(buf->pg) +
+										buf->offset,
+									len, DMA_FROM_DEVICE);
+
+			xdp_prepare_buff(&xdp, page_address(buf->pg), buf->offset, len, false);
+
+			res = onic_run_xdp(q, &xdp);
+			if (IS_ERR(res))
+			{
+				unsigned int xdp_res = -PTR_ERR(res);
+
+				if (xdp_res & (ONIC_XDP_TX | ONIC_XDP_REDIR))
+				{
+					xdp_xmit |= xdp_res;
+				}
+
+				// Allocate skb only if we are continuing to process the packet
+				if (xdp_res & ONIC_XDP_PASS)
+				{
+
+					// allocate a new skb structure around the data
+					skb = napi_build_skb(xdp.data_hard_start, PAGE_SIZE);
+
+					if (!skb)
+					{
+						rv = -ENOMEM;
+						break;
+					}
+
+					// mark the skb for page_pool recycling
+					skb_mark_for_recycle(skb);
+					// reserve space in the skb for the data for the xdp headroom
+					skb_reserve(skb, xdp.data - xdp.data_hard_start);
+					// set the data pointer
+					skb_put(skb, xdp.data_end - xdp.data);
+
+					skb->protocol = eth_type_trans(skb, q->netdev);
+					skb->ip_summed = CHECKSUM_NONE;
+					skb_record_rx_queue(skb, qid);
+					rv = napi_gro_receive(napi, skb);
+					if (rv < 0)
+					{
+						netdev_err(q->netdev, "napi_gro_receive, err = %d", rv);
+						break;
+					}
 				}
 			}
 		}
 
 
 		// here the page where packet data was written has either been recycled or marked for recycling
+		//TODO: keep track of the how much pages have been used and batch this at the end of the loop?
+		// try it and perf it to see if there are any differences
 		onic_rx_page_refill(q);
 
 		pcpu_stats_pointer->rx_packets++;
