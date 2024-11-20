@@ -8,6 +8,49 @@
 #include "onic_lib.h"
 #include "onic_netdev.h"
 
+void onic_xsk_xmit(struct onic_tx_queue *q, int budget) {
+
+	struct xsk_buff_pool = q->xsk_pool;
+	u8 *desc_ptr;
+	dma_addr_t dma_addr;
+	struct onic_ring *ring;
+	struct qdma_h2c_st_desc desc;
+	bool debug = 1;
+	struct xdp_desc xdp_desc;
+	int trasmitted = 0;
+	while (budget--) {
+	// xsk_tx_peek_desc it's the function that fetches the xdp frames from the
+	// TX ring of the xsk buff pool 
+	if (!xsk_tx_peek_desc(tx_queue->xsk_pool, &desc)) {
+		break;
+	}
+	trasmitted++;
+	dma_addr = xsk_buff_raw_get_dma(tx_queue->xsk_pool, desc);
+	xsk_buff_raw_dma_sync_for_device(tx_queue->xsk_pool, dma_addr,
+					 xdp_desc.len);
+	
+	
+	desc_ptr = ring->desc + QDMA_H2C_ST_DESC_SIZE * ring->next_to_use;
+	desc.len = xdp_desc.len;
+	desc.src_addr = dma_addr;
+	desc.metadata = xdp_desc.len;
+	qdma_pack_h2c_st_desc(desc_ptr, &desc);
+
+// the problem here is: the reclaiming of the pages is handled by the xsk api 	
+	q->buffer[ring->next_to_use].type = ONIC_XSK_TX;
+	q->buffer[ring->next_to_use].skb = NULL;
+	q->buffer[ring->next_to_use].dma_addr = dma_addr;
+	q->buffer[ring->next_to_use].len = xdp_desc->len;
+
+	onic_ring_increment_head(ring);
+	}
+	if (trasmitted) xsk_tx_completed(xsk_pool, trasmitted);
+	wmb();
+	onic_set_tx_head(priv->hw.qdma, qid, ring->next_to_use);
+	return trasmitted;
+}
+
+
 int onic_alloc_rx_xpds(struct onic_rx_queue *rx_queue)
 {
 	unsigned long size = sizeof(*rx_queue->xdps) * onic_ring_get_real_count(&rx_queue->ring);
@@ -133,7 +176,26 @@ struct sk_buff *onic_xsk_construct_skb(struct napi_struct *napi, struct xdp_buff
 
 static int onic_xsk_wakeup(struct net_device *dev, u16 qid, u32 flags)
 {
-	return -1;
+	struct onic_private *priv = netdev_priv(dev);
+	struct onic_rx_queue *rx_queue = priv->rx_queue[qid];
+
+	//test that the queue exists and that it is an AF_XDP_ZC queue
+	if (qid >= priv->num_rx_queues || qid >= priv->num_tx_queues)
+		return -EINVAL;
+
+	if (!test_bit(priv->af_xdp_zc_qps, qid) || !rx_queue->xsk_pool)
+		return -EINVAL;
+
+	if (!napi_if_scheduled_mark_missed(&rx_queue->napi))
+	{
+		// this is not ideal: the best thing would be to trigger an irq. The irq would maintain core affinity.
+		// instead i'm using a napi_schedule which will run on the current core.
+		// This shouldn't be a huge problems because napi context is a softirq and 
+		// it guarantees that the same napi instance will not run on two different cores at the same time.
+		napi_schedule(&rx_queue->napi);
+	}
+	
+	return 0;
 }
 
 /**

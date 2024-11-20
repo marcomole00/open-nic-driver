@@ -191,7 +191,7 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
 	u8 *desc_ptr;
 	dma_addr_t dma_addr;
 	struct onic_ring *ring;
-  	struct qdma_h2c_st_desc desc;
+	struct qdma_h2c_st_desc desc;
 	bool debug = 1;
 	struct rtnl_link_stats64 *pcpu_stats_pointer;
 	enum onic_tx_buf_type type;
@@ -385,9 +385,12 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 	struct rtnl_link_stats64 *pcpu_stats_pointer;
 	pcpu_stats_pointer = this_cpu_ptr(priv->netdev_stats);
 
-	for (i = 0; i < priv->num_tx_queues; i++)
-		onic_tx_clean(priv->tx_queue[i]);
-
+	for (i = 0; i < priv->num_tx_queues; i++) {
+		if (qid == i && test_bit(priv->af_xdp_zc_qps, qid) && q->xsk_pool) 
+		{
+			budget -=	onic_xsk_xmit(priv->tx_queue[qid],budget);
+		} else 	onic_tx_clean(priv->tx_queue[i]);
+	}
 	cmpl_ptr =
 		cmpl_ring->desc + QDMA_C2H_CMPL_SIZE * cmpl_ring->next_to_clean;
 	cmpl_stat_ptr =
@@ -1141,6 +1144,7 @@ netdev_tx_t onic_xmit_frame(struct sk_buff *skb, struct net_device *dev)
 	struct onic_tx_queue *q;
 	struct onic_ring *ring;
 	struct qdma_h2c_st_desc desc;
+	// TODO: check how to tell the kernel to ignore a queue if it is configured as a ZC XSK queue
 	u16 qid = skb->queue_mapping;
 	dma_addr_t dma_addr;
 	u8 *desc_ptr;
