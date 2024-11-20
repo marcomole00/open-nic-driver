@@ -446,7 +446,10 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 				}
 				
 				// mark the skb for page_pool recycling
-				skb_mark_for_recycle(skb);
+				//skb_mark_for_recycle(skb);
+				// i'm getting some memoory leak (inflight pages when destroing the page pool), maybe this can fix it
+				
+				page_pool_release_page(q->page_pool, buf->pg);
 				// reserve space in the skb for the data for the xdp headroom
 				skb_reserve(skb, xdp.data - xdp.data_hard_start);
 				// set the data pointer
@@ -725,7 +728,8 @@ static void onic_clear_rx_queue(struct onic_private *priv, u16 qid)
 	if (ring->desc)
 		dma_free_coherent(&priv->pdev->dev, size, ring->desc,
 				  ring->dma_addr);
-
+	netdev_info(priv->netdev, "Clearing the rx queue: desc pointers %d %d , cmpl pointers %d %d", q->desc_ring.next_to_clean, q->desc_ring.next_to_use, q->cmpl_ring.next_to_clean, q->cmpl_ring.next_to_use );
+	
 	for (i = 0; i < real_count; ++i) {
 		struct page *pg = q->buffer[i].pg;
 		// the third argument is "bool allow_direct", and it tells the allocator if the page was
