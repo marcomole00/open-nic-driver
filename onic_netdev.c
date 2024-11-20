@@ -448,7 +448,7 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 				// mark the skb for page_pool recycling
 				//skb_mark_for_recycle(skb);
 				// i'm getting some memoory leak (inflight pages when destroing the page pool), maybe this can fix it
-				
+
 				page_pool_release_page(q->page_pool, buf->pg);
 				// reserve space in the skb for the data for the xdp headroom
 				skb_reserve(skb, xdp.data - xdp.data_hard_start);
@@ -520,6 +520,8 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 			   (QDMA_C2H_CMPL_SIZE * cmpl_ring->next_to_clean);
 
 		if ((++work) >= budget) {
+			if (xdp_xmit & ONIC_XDP_REDIR)
+					xdp_do_flush();
 			if (debug)
 				netdev_info(q->netdev,
 					    "watchdog work %u, budget %u", work,
