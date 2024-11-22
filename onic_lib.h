@@ -47,4 +47,6 @@ int onic_init_interrupt(struct onic_private *priv);
  **/
 void onic_clear_interrupt(struct onic_private *priv);
 
+void onic_disable_q_vector(struct onic_q_vector *vec);
+void onic_enable_q_vector(struct onic_q_vector *vec);
 #endif

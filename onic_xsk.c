@@ -1,4 +1,6 @@
+#include <linux/netdevice.h>
 #include <linux/bpf_trace.h>
+#include <linux/pci.h>
 #include <linux/stringify.h>
 #include <net/xdp_sock_drv.h>
 #include <net/xdp.h>
@@ -8,98 +10,51 @@
 #include "onic_lib.h"
 #include "onic_netdev.h"
 
-void onic_xsk_xmit(struct onic_tx_queue *q, int budget) {
+int onic_xsk_xmit(struct onic_private *priv, struct onic_tx_queue *q, int budget)
+{
 
-	struct xsk_buff_pool = q->xsk_pool;
 	u8 *desc_ptr;
 	dma_addr_t dma_addr;
-	struct onic_ring *ring;
+	struct onic_ring *ring = &q->ring;
 	struct qdma_h2c_st_desc desc;
-	bool debug = 1;
-	struct xdp_desc xdp_desc;
+	struct xdp_desc *xdp_desc = q->xsk_pool->tx_descs;
 	int trasmitted = 0;
-	while (budget--) {
-	// xsk_tx_peek_desc it's the function that fetches the xdp frames from the
-	// TX ring of the xsk buff pool 
-	if (!xsk_tx_peek_desc(tx_queue->xsk_pool, &desc)) {
-		break;
-	}
-	trasmitted++;
-	dma_addr = xsk_buff_raw_get_dma(tx_queue->xsk_pool, desc);
-	xsk_buff_raw_dma_sync_for_device(tx_queue->xsk_pool, dma_addr,
-					 xdp_desc.len);
-	
-	
-	desc_ptr = ring->desc + QDMA_H2C_ST_DESC_SIZE * ring->next_to_use;
-	desc.len = xdp_desc.len;
-	desc.src_addr = dma_addr;
-	desc.metadata = xdp_desc.len;
-	qdma_pack_h2c_st_desc(desc_ptr, &desc);
+	while (budget--)
+	{
+		// xsk_tx_peek_desc it's the function that fetches the xdp frames from the
+		// TX ring of the xsk buff pool
+		if (!xsk_tx_peek_desc(q->xsk_pool, xdp_desc))
+		{
+			break;
+		}
+		trasmitted++;
+		dma_addr = xsk_buff_raw_get_dma(q->xsk_pool,xdp_desc->addr);
+		xsk_buff_raw_dma_sync_for_device(q->xsk_pool, dma_addr,
+										 xdp_desc->len);
 
-// the problem here is: the reclaiming of the pages is handled by the xsk api 	
-	q->buffer[ring->next_to_use].type = ONIC_XSK_TX;
-	q->buffer[ring->next_to_use].skb = NULL;
-	q->buffer[ring->next_to_use].dma_addr = dma_addr;
-	q->buffer[ring->next_to_use].len = xdp_desc->len;
+		desc_ptr = ring->desc + QDMA_H2C_ST_DESC_SIZE * ring->next_to_use;
+		desc.len = xdp_desc->len;
+		desc.src_addr = dma_addr;
+		desc.metadata = xdp_desc->len;
+		qdma_pack_h2c_st_desc(desc_ptr, &desc);
 
-	onic_ring_increment_head(ring);
+		// the problem here is: the reclaiming of the pages is handled by the xsk api
+		// q->buffer[ring->next_to_use].type = NULL; // THIS WILL BE DEFINED AFTER I REBASE THE CHANGES FROM THE OTHER BRANCH
+		q->buffer[ring->next_to_use].skb = NULL;
+		q->buffer[ring->next_to_use].dma_addr = dma_addr;
+		q->buffer[ring->next_to_use].len = xdp_desc->len;
+
+		onic_ring_increment_head(ring);
 	}
-	if (trasmitted) xsk_tx_completed(xsk_pool, trasmitted);
+	if (trasmitted)
+		xsk_tx_completed(q->xsk_pool, trasmitted);
 	wmb();
-	onic_set_tx_head(priv->hw.qdma, qid, ring->next_to_use);
+	onic_set_tx_head(priv->hw.qdma, q->qid, ring->next_to_use);
 	return trasmitted;
 }
 
 
-int onic_alloc_rx_xpds(struct onic_rx_queue *rx_queue)
-{
-	unsigned long size = sizeof(*rx_queue->xdps) * onic_ring_get_real_count(&rx_queue->ring);
-	rx_queue->xdps = kzalloc(size, GFP_KERNEL);
-	return rx_queue->xdps ? 0 : -ENOMEM;
-}
-
-
-
-bool onic_alloc_rx_buffers_zc(struct onic_rx_queue *rx_queue, u16 count)
-{
-
-	struct onic_private *priv = netdev_priv(rx_queue->netdev);
-	struct onic_ring *ring = &rx_queue->ring;
-	struct xpd_buff *xdp, **xdps;
-	struct dma_addr_t dma;
-	xdps = &rx_queue->xdps[ring->next_to_use];
-	u8 *desc_ptr;
-	struct qdma_c2h_st_desc desc;
-
-	bool ret = true;
-
-	do
-	{
-
-		xdp = xsk_buff_alloc(rx_queue->xsk_pool);
-		if (!xdp)
-		{
-			ret = false;
-			goto no_buffers;
-		}
-
-		*xdps = xdp;
-		dma = xsk_buff_get_dma(xdp);
-		desc_ptr = ring->desc + QDMA_C2H_ST_DESC_SIZE * ring->next_to_use;
-		desc.dst_addr = dma;
-		qdma_pack_c2h_st_desc(desc_ptr, &desc);
-		onic_ring_increment_head(ring);
-		xdps++;
-
-	} while (--count);
-
-no_buffers:
-
-	onic_set_rx_head(priv->hw.qdma, rx_queue->qid, ring->next_to_use);
-	return ret;
-}
-
-int onic_run_xdp_zc( struct onic_rx_queue *rx_queue, struct xdp_buff *xdp_buff)
+int onic_run_xdp_zc(struct onic_rx_queue *rx_queue, struct xdp_buff *xdp_buff)
 {
 
 	u32 act;
@@ -168,33 +123,31 @@ struct sk_buff *onic_xsk_construct_skb(struct napi_struct *napi, struct xdp_buff
 	skb_reserve(skb, xdp->data - xdp->data_hard_start);
 
 	skb_put_data(skb, xdp->data, data_size);
-	skb->protocol = eth_type_trans(skb, q->netdev);
 	skb->ip_summed = CHECKSUM_NONE;
 	return skb;
 }
 
-
-static int onic_xsk_wakeup(struct net_device *dev, u16 qid, u32 flags)
+ int onic_xsk_wakeup(struct net_device *dev, u16 qid, u32 flags)
 {
 	struct onic_private *priv = netdev_priv(dev);
 	struct onic_rx_queue *rx_queue = priv->rx_queue[qid];
 
-	//test that the queue exists and that it is an AF_XDP_ZC queue
+	// test that the queue exists and that it is an AF_XDP_ZC queue
 	if (qid >= priv->num_rx_queues || qid >= priv->num_tx_queues)
 		return -EINVAL;
 
-	if (!test_bit(priv->af_xdp_zc_qps, qid) || !rx_queue->xsk_pool)
+	if (!test_bit(qid,priv->af_xdp_zc_qps)  || !rx_queue->xsk_pool)
 		return -EINVAL;
 
 	if (!napi_if_scheduled_mark_missed(&rx_queue->napi))
 	{
 		// this is not ideal: the best thing would be to trigger an irq. The irq would maintain core affinity.
 		// instead i'm using a napi_schedule which will run on the current core.
-		// This shouldn't be a huge problems because napi context is a softirq and 
+		// This shouldn't be a huge problems because napi context is a softirq and
 		// it guarantees that the same napi instance will not run on two different cores at the same time.
 		napi_schedule(&rx_queue->napi);
 	}
-	
+
 	return 0;
 }
 
@@ -207,7 +160,7 @@ static int onic_xsk_wakeup(struct net_device *dev, u16 qid, u32 flags)
  * return 0 on success, negative on failure
  */
 
-static int onic_xsk_pool_enable(struct onic_private *priv, struct xsk_buff_pool *pool, u16 qid)
+ int onic_xsk_pool_enable(struct onic_private *priv, struct xsk_buff_pool *pool, u16 qid)
 {
 
 	int err;
@@ -227,56 +180,67 @@ static int onic_xsk_pool_enable(struct onic_private *priv, struct xsk_buff_pool 
 	if (if_running)
 	{
 		// TODO
-		err = onic_queue_pair_disable(priv, qid);
-		if (err)
-			return err;
-
-		err = onic_queue_pair_enable(priv, qid);
-		if (err)
-			return err;
-
+		onic_queue_pair_disable(priv, qid);
+		onic_queue_pair_enable(priv, qid);
 		/* Kick start the NAPI context so that receiving will start */
 		err = onic_xsk_wakeup(priv->netdev, qid, XDP_WAKEUP_RX);
 		if (err)
 			return err;
 	}
+	return 0;
 }
 
+
+int onic_xsk_pool_disable(struct onic_private *priv, u16 qid)
+{
+	struct xsk_buff_pool *pool = priv->rx_queue[qid]->xsk_pool;
+	if (qid >= priv->num_rx_queues || qid >= priv->num_tx_queues)
+		return -EINVAL;
+
+
+	clear_bit(qid, priv->af_xdp_zc_qps);
+	//TODO
+	onic_queue_pair_disable(priv, qid);
+	onic_queue_pair_enable(priv, qid);
+
+	xsk_pool_dma_unmap(pool, DMA_ATTR_SKIP_CPU_SYNC);
+
+
+
+	return 0;
+}
 int onic_xsk_pool_setup(struct onic_private *priv, struct xsk_buff_pool *pool, u16 qid)
 {
 
-	return pool = onic_xsk_pool_enable(priv, pool, qid) : onic_xsk_pool_disable(priv, qid);
+	return pool ?  onic_xsk_pool_enable(priv, pool, qid) : onic_xsk_pool_disable(priv, qid);
 }
 
+void onic_queue_pair_disable(struct onic_private *priv, u16 qid)
+{
 
-
-int onic_queue_pair_disable(struct onic_private *priv, u16 qid) {
-
-	struct onic_rx_queue *rx_queue = priv->rx_queue[qid];
-	int real_count = onic_ring_get_real_count(&priv->rx_queue[qid]->ring);
-	struct netdev_queue *txq = netdev_get_tx_queue(priv->dev, qid);
+	struct netdev_queue *txq = netdev_get_tx_queue(priv->netdev, qid);
 	// disable interrupts for the queue
 	onic_disable_q_vector(priv->q_vector[qid]);
 	// disable napi (if there is a napi instance running this will block until it is done)
 	napi_disable(&priv->rx_queue[qid]->napi);
 
-	// after disabling the napi i have a doubt: do i have to consume the packets that may be still in the queue ,something like 
+	// after disabling the napi i have a doubt: do i have to consume the packets that may be still in the queue ,something like
 	// gro_receive (here we're not in napi context) ? Or i just de alloc all the pages and i ignore the question.
 	// for now i'll go with the second option.
 
 	netif_tx_stop_queue(txq);
 
-	onic_tx_clean(priv, qid);
+	onic_tx_clean(priv->tx_queue[qid]);
 	onic_clear_rx_queue(priv, qid);
 	onic_clear_tx_queue(priv, qid);
-	
 }
 
-int onic_queue_pair_enable(struct onic_private *priv, u16 qid) {
-	
-	struct onic_rx_queue *rx_queue = priv->rx_queue[qid];
-	int real_count = onic_ring_get_real_count(&priv->rx_queue[qid]->ring);
-	struct netdev_queue *txq = netdev_get_tx_queue(priv->dev, qid);
+void onic_queue_pair_enable(struct onic_private *priv, u16 qid)
+{
+
+	// struct onic_rx_queue *rx_queue = priv->rx_queue[qid];
+	// int real_count = onic_ring_get_real_count(&priv->rx_queue[qid]->ring);
+	struct netdev_queue *txq = netdev_get_tx_queue(priv->netdev, qid);
 
 	// this already enables napi
 	onic_init_rx_queue(priv, qid);
@@ -284,5 +248,4 @@ int onic_queue_pair_enable(struct onic_private *priv, u16 qid) {
 
 	netif_tx_wake_queue(txq);
 	onic_enable_q_vector(priv->q_vector[qid]);
-
 }

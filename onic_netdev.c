@@ -31,34 +31,35 @@
 #include "onic_hardware.h"
 #include "qdma_access/qdma_register.h"
 #include "onic.h"
+#include "onic_xsk.h"
 
 #define ONIC_RX_DESC_STEP 256
 
-inline static u16 onic_ring_get_real_count(struct onic_ring *ring)
+inline u16 onic_ring_get_real_count(struct onic_ring *ring)
 {
 	/* Valid writeback entry means one less count of descriptor entries */
 	return (ring->wb) ? (ring->count - 1) : ring->count;
 }
 
-inline static bool onic_ring_full(struct onic_ring *ring)
+inline  bool onic_ring_full(struct onic_ring *ring)
 {
 	u16 real_count = onic_ring_get_real_count(ring);
 	return ((ring->next_to_use + 1) % real_count) == ring->next_to_clean;
 }
 
-inline static void onic_ring_increment_head(struct onic_ring *ring)
+inline  void onic_ring_increment_head(struct onic_ring *ring)
 {
 	u16 real_count = onic_ring_get_real_count(ring);
 	ring->next_to_use = (ring->next_to_use + 1) % real_count;
 }
 
-inline static void onic_ring_increment_tail(struct onic_ring *ring)
+inline  void onic_ring_increment_tail(struct onic_ring *ring)
 {
 	u16 real_count = onic_ring_get_real_count(ring);
 	ring->next_to_clean = (ring->next_to_clean + 1) % real_count;
 }
 
-static void onic_tx_clean(struct onic_tx_queue *q)
+void onic_tx_clean(struct onic_tx_queue *q)
 {
 	struct onic_private *priv = netdev_priv(q->netdev);
 	struct onic_ring *ring = &q->ring;
@@ -155,7 +156,7 @@ static void onic_rx_page_refill(struct onic_rx_queue *q)
 			return;
 		}
 		q->xdps[desc_ring->next_to_clean] = xdp_buff;
-		desc.dst_addr = xsk_buff_get_dma(xdp_buff);
+		desc.dst_addr = xsk_buff_xdp_get_dma(xdp_buff);
 	}
 	else
 	{
@@ -249,7 +250,7 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
 	return ONIC_XDP_TX;
 }
 
-static int onic_xdp_xmit_back(struct onic_rx_queue *q, struct xdp_buff *xdp_buff) {
+int onic_xdp_xmit_back(struct onic_rx_queue *q, struct xdp_buff *xdp_buff) {
 	struct onic_private *priv = netdev_priv(q->netdev);
 	struct xdp_frame *xdpf = xdp_convert_buff_to_frame(xdp_buff);
 	struct onic_tx_queue *tx_queue;
@@ -374,7 +375,7 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 	u8 *cmpl_stat_ptr;
 	u32 color_stat;
 	int work = 0;
-	int i, rv;
+	int i, rv, err;
 	bool napi_cmpl_rval = 0;
 	bool flipped = 0;
 	bool debug = 0;
@@ -386,9 +387,9 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 	pcpu_stats_pointer = this_cpu_ptr(priv->netdev_stats);
 
 	for (i = 0; i < priv->num_tx_queues; i++) {
-		if (qid == i && test_bit(priv->af_xdp_zc_qps, qid) && q->xsk_pool) 
+		if (qid == i && test_bit(qid,priv->af_xdp_zc_qps) && q->xsk_pool) 
 		{
-			budget -=	onic_xsk_xmit(priv->tx_queue[qid],budget);
+			budget -=	onic_xsk_xmit(priv,priv->tx_queue[qid],budget);
 		} else 	onic_tx_clean(priv->tx_queue[i]);
 	}
 	cmpl_ptr =
@@ -462,7 +463,8 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 				skb = onic_xsk_construct_skb(napi, xdp_buff);
 				if (skb)
 				{
-					skb_record_rx_queue(skb, rx_queue->qid);
+					skb_record_rx_queue(skb, q->qid);
+					skb->protocol = eth_type_trans(skb, q->netdev);
 					err = napi_gro_receive(napi, skb);
 					if (err < 0)
 					{
@@ -651,7 +653,7 @@ out_of_budget:
 	return work;
 }
 
-static void onic_clear_tx_queue(struct onic_private *priv, u16 qid)
+void onic_clear_tx_queue(struct onic_private *priv, u16 qid)
 {
 	struct onic_tx_queue *q = priv->tx_queue[qid];
 	struct onic_ring *ring;
@@ -687,7 +689,7 @@ static void onic_clear_tx_queue(struct onic_private *priv, u16 qid)
 	priv->tx_queue[qid] = NULL;
 }
 
-static int onic_init_tx_queue(struct onic_private *priv, u16 qid)
+ int onic_init_tx_queue(struct onic_private *priv, u16 qid)
 {
 	const u8 rngcnt_idx = 0;
 	struct net_device *dev = priv->netdev;
@@ -738,11 +740,20 @@ static int onic_init_tx_queue(struct onic_private *priv, u16 qid)
 	netdev_info(dev, "TX queue %d, ring count %d, ring size %d, real_count %d", 
 		    qid, ring->count, size, real_count);
 
-	if (test_bit(priv->af_xdp_zc_qps)) {
+	if (test_bit(q->qid, priv->af_xdp_zc_qps))
+	{
 		q->xsk_pool = xsk_get_pool_from_qid(priv->netdev, qid);
-		if (!q->xsk_pool) {
+		if (!q->xsk_pool)
+		{
 			rv = -ENOMEM;
 			netdev_err(dev, "fatal error in setting up the tx queue %d, xsk_pool is NULL", qid);
+			goto clear_tx_queue;
+		}
+
+		if (xsk_pool_get_rx_frame_size(q->xsk_pool) > PAGE_SIZE)
+		{
+			rv = -ENOMEM;
+			netdev_err(dev, "fatal error in setting up the tx queue %d, xsk_pool frame size is too big", qid);
 			goto clear_tx_queue;
 		}
 	}
@@ -771,7 +782,7 @@ clear_tx_queue:
 	return rv;
 }
 
-static void onic_clear_rx_queue(struct onic_private *priv, u16 qid)
+void onic_clear_rx_queue(struct onic_private *priv, u16 qid)
 {
 	struct onic_rx_queue *q = priv->rx_queue[qid];
 	struct onic_ring *ring;
@@ -810,8 +821,10 @@ static void onic_clear_rx_queue(struct onic_private *priv, u16 qid)
 			struct page *pg = q->buffer[i].pg;
 			page_pool_put_full_page(q->page_pool, pg, false);
 		} else if (q->xsk_pool) {
-			struct xdp_buff *xdp_buff = q->xpds[i];
+			struct xdp_buff *xdp_buff = q->xdps[i];
 			xsk_buff_free(xdp_buff);
+		} else {
+			netdev_err(priv->netdev, "unknown buffer type");
 		}
 	}
 
@@ -870,7 +883,7 @@ err_free_pp:
 	return err;
 }
 
-static int onic_init_rx_queue(struct onic_private *priv, u16 qid)
+ int onic_init_rx_queue(struct onic_private *priv, u16 qid)
 {
 	// TODO: make these configurable via ethtool
 	const u8 bufsz_idx = 8;
@@ -925,10 +938,10 @@ static int onic_init_rx_queue(struct onic_private *priv, u16 qid)
 	ring->color = 0;
 
 	if (test_bit(qid, priv->af_xdp_zc_qps)) {
-		q->xsk_pool = xsk_get_pool_from_qid(priv->dev, qid);
+		q->xsk_pool = xsk_get_pool_from_qid(dev, qid);
 		if (!q->xsk_pool) {
 			rv = -ENOMEM;
-			netdev_err("fatal error: xsk_pool is NULL at queue %d but the state bit is set", qid);
+			netdev_err(dev, "fatal error: xsk_pool is NULL at queue %d but the state bit is set", qid);
 			goto clear_rx_queue;
 		}
 
@@ -940,7 +953,7 @@ static int onic_init_rx_queue(struct onic_private *priv, u16 qid)
 		}
 
 		for (i = 0; i < real_count; ++i) {
-			q->xdps[i] = xsk_buff_alloc(q->xsk_pool, GFP_KERNEL);
+			q->xdps[i] = xsk_buff_alloc(q->xsk_pool);
 			if (!q->xdps[i]) {
 				rv = -ENOMEM;
 				goto clear_rx_queue;
@@ -951,7 +964,7 @@ static int onic_init_rx_queue(struct onic_private *priv, u16 qid)
 
 			u8 *desc_ptr = ring->desc + QDMA_C2H_ST_DESC_SIZE * i;
 			struct qdma_c2h_st_desc desc;
-			desc.dst_addr = xsk_buff_dma_addr(q->xdps[i]);
+			desc.dst_addr = xsk_buff_xdp_get_dma(q->xdps[i]);
 			qdma_pack_c2h_st_desc(desc_ptr, &desc);
 
 		}
@@ -1301,7 +1314,9 @@ int onic_xdp(struct net_device *dev, struct netdev_bpf *xdp) {
 	switch (xdp->command) {
 		case XDP_SETUP_PROG:
 			return onic_setup_xdp_prog(dev, xdp->prog);
-		case XDP_SET
+		case XDP_SETUP_XSK_POOL:
+			// TODO:: implement this, placeholder while i fix compilation issues
+			return -EINVAL;
 		default:
 			return -EINVAL;
 	}

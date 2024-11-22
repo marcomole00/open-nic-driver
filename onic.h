@@ -56,6 +56,7 @@ struct onic_tx_buffer {
 	u64 time_stamp;
 };
 
+//fat pointer around a page
 struct onic_rx_buffer {
 	struct page *pg;
 	unsigned int offset;
@@ -98,8 +99,8 @@ struct onic_rx_queue {
 
 	union {
 		struct onic_rx_buffer *buffer; // normal use
-		struct xdp_buff *xpds; // for af_xdp_zc
-	}
+		struct xdp_buff **xdps; // for af_xdp_zc
+	};
 	
 	struct onic_ring desc_ring;
 	struct onic_ring cmpl_ring;
@@ -139,7 +140,7 @@ struct onic_private {
 	DECLARE_BITMAP(state, 32);
 	DECLARE_BITMAP(flags, 32);
 
-        int RS_FEC;
+	int RS_FEC;
 
 	u16 num_q_vectors;
 	u16 num_tx_queues;
@@ -158,7 +159,7 @@ struct onic_private {
 	struct onic_hardware hw;
 
 	/* tracks which queue pairs are in xsk mode*/
-	u16 af_xdp_zc_qps;
+	DECLARE_BITMAP(af_xdp_zc_qps, ONIC_MAX_QUEUES);
 };
 
 #endif

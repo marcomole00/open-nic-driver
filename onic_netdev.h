@@ -18,7 +18,7 @@
 #define __ONIC_NETDEV_H__
 
 #include <linux/netdevice.h>
-
+#include "onic.h"
 /**
  * onic_open_netdev - initialize TX/RX queues and open network device
  * @dev: pointer to registered net device
@@ -53,4 +53,19 @@ int onic_xdp(struct net_device *dev, struct netdev_bpf *xdp);
 
 int onic_xdp_xmit(struct net_device *dev, int n, struct xdp_frame **frames,
           u32 flags);
+
+
+int onic_init_tx_queue(struct onic_private *priv, u16 qid);
+
+int onic_init_rx_queue(struct onic_private *priv, u16 qid);
+u16 onic_ring_get_real_count(struct onic_ring *ring);
+bool onic_ring_full(struct onic_ring *ring);
+void onic_ring_increment_head(struct onic_ring *ring);
+void onic_ring_increment_tail(struct onic_ring *ring);
+int onic_xdp_xmit_back(struct onic_rx_queue *q, struct xdp_buff *xdp_buff);
+void onic_clear_rx_queue(struct onic_private *priv, u16 qid);
+void onic_clear_tx_queue(struct onic_private *priv, u16 qid);
+void onic_tx_clean(struct onic_tx_queue *q);
+
+
 #endif
