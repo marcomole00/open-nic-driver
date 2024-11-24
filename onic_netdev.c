@@ -63,6 +63,8 @@ static void onic_tx_clean(struct onic_tx_queue *q)
 	struct qdma_wb_stat wb;
 	int work, i;
 
+	// this is a locking mechanism to guarantee that only one thread is cleaning the ring
+	// bitmask functions are atomic!
 	if (test_and_set_bit(0, q->state))
 		return;
 
@@ -80,13 +82,24 @@ static void onic_tx_clean(struct onic_tx_queue *q)
 	for (i = 0; i < work; ++i) {
 		struct onic_tx_buffer *buf = &q->buffer[ring->next_to_clean];
 
-		dma_unmap_single(&priv->pdev->dev, buf->dma_addr, buf->len, DMA_TO_DEVICE);
 
-		if (buf->type == ONIC_TX_BUF_TYPE_SKB) {
+		if (buf->type == ONIC_TX_SKB) {
+			// The packet originated from the kernel network stack
+			dma_unmap_single(&priv->pdev->dev, buf->dma_addr, buf->len, DMA_TO_DEVICE);
 			dev_kfree_skb_any(buf->skb);
-		}  else if (buf->type == ONIC_TX_BUF_TYPE_XDP) {
-			xdp_return_frame_rx_napi(buf->xdpf);
-		} else {
+			buf->skb = NULL;
+		}  else if (buf->type == ONIC_TX_XDPF) {
+			// The packet originated from a XDP_TX -> It comes from a page pool, no need to dma unmap
+			xdp_return_frame(buf->xdpf);
+			buf->xdpf = NULL;
+		} else if (buf->type == ONIC_TX_XDPF_XMIT) {
+			// The packet originated from the XDP program of another driver. 
+			// It was mapped to a DMA address and needs to be unmapped
+			dma_unmap_single(&priv->pdev->dev, buf->dma_addr, buf->len, DMA_TO_DEVICE);
+			xdp_return_frame(buf->xdpf);
+			buf->xdpf = NULL;
+		}
+		 else {
 			netdev_err(priv->netdev, "unknown buffer type %d\n", buf->type);
 		}
 
@@ -156,6 +169,7 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
   	struct qdma_h2c_st_desc desc;
 	bool debug = 1;
 	struct rtnl_link_stats64 *pcpu_stats_pointer;
+	enum onic_tx_buf_type type;
 
 	ring = &tx_queue->ring;
 	
@@ -170,6 +184,7 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
 	if (dma_map) {
 		/* ndo_xdp_dmit */
 		dma_addr = dma_map_single(&priv->pdev->dev, xdpf->data,xdpf->len, DMA_TO_DEVICE);
+		type = ONIC_TX_XDPF_XMIT;
 		if (unlikely(dma_mapping_error(&priv->pdev->dev, dma_addr)))
 			return ONIC_XDP_CONSUMED;
 	} else {
@@ -179,6 +194,7 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
 		dma_addr = page_pool_get_dma_addr(page) + sizeof(*xdpf) + xdpf->headroom;
 		dma_sync_single_for_device(&priv->pdev->dev, dma_addr,
 					   xdpf->len, DMA_BIDIRECTIONAL);
+		type = ONIC_TX_XDPF;
 		
 	}
 
@@ -191,7 +207,7 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
 	qdma_pack_h2c_st_desc(desc_ptr, &desc);
 
 	tx_queue->buffer[ring->next_to_use].xdpf = xdpf;
-	tx_queue->buffer[ring->next_to_use].type = ONIC_TX_BUF_TYPE_XDP;
+	tx_queue->buffer[ring->next_to_use].type = type;
 	tx_queue->buffer[ring->next_to_use].dma_addr = dma_addr;
 	tx_queue->buffer[ring->next_to_use].len = xdpf->len;
 	
@@ -203,10 +219,7 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
 
 	// This gets called only if version is >= 5.3.0 since we do not support
 	// TX/REDIR on older versions
-	if (onic_ring_full(ring) || !netdev_xmit_more()) {
-		wmb();
-		onic_set_tx_head(priv->hw.qdma, tx_queue->qid, ring->next_to_use);
-	}
+	
 
 	return ONIC_XDP_TX;
 }
@@ -214,7 +227,6 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
 static int onic_xdp_xmit_back(struct onic_rx_queue *q, struct xdp_buff *xdp_buff) {
 	struct onic_private *priv = netdev_priv(q->netdev);
 	struct xdp_frame *xdpf = xdp_convert_buff_to_frame(xdp_buff);
-	struct onic_ring *tx_ring;
 	struct onic_tx_queue *tx_queue;
 	struct netdev_queue *nq;
 	u32 ret = 0, cpu = smp_processor_id();
@@ -230,12 +242,15 @@ static int onic_xdp_xmit_back(struct onic_rx_queue *q, struct xdp_buff *xdp_buff
 		return -ENXIO;
 	}
 
-	tx_ring = &tx_queue->ring;
 	nq = netdev_get_tx_queue(tx_queue->netdev, tx_queue->qid);
 
 	__netif_tx_lock(nq, cpu);
 	ret = onic_xmit_xdp_ring(priv, tx_queue, xdpf,false);
 	q->xdp_rx_stats.xdp_tx++;
+
+	wmb();
+	onic_set_tx_head(priv->hw.qdma, tx_queue->qid, tx_queue->ring.next_to_use);
+
 	__netif_tx_unlock(nq);
 
 	return ret;
@@ -448,6 +463,7 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 			}
 		}
 
+
 		// here the page where packet data was written has either been recycled or marked for recycling
 		onic_rx_page_refill(q);
 
@@ -501,6 +517,8 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 			   (QDMA_C2H_CMPL_SIZE * cmpl_ring->next_to_clean);
 
 		if ((++work) >= budget) {
+			if (xdp_xmit & ONIC_XDP_REDIR)
+					xdp_do_flush();
 			if (debug)
 				netdev_info(q->netdev,
 					    "watchdog work %u, budget %u", work,
@@ -572,9 +590,12 @@ static void onic_clear_tx_queue(struct onic_private *priv, u16 qid)
 	struct onic_ring *ring;
 	u32 size;
 	int real_count;
+	int i;
 
 	if (!q)
 		return;
+
+	onic_tx_clean(q);
 
 	onic_qdma_clear_tx_queue(priv->hw.qdma, qid);
 
@@ -582,6 +603,14 @@ static void onic_clear_tx_queue(struct onic_private *priv, u16 qid)
 	real_count = ring->count - 1;
 	size = QDMA_H2C_ST_DESC_SIZE * real_count + QDMA_WB_STAT_SIZE;
 	size = ALIGN(size, PAGE_SIZE);
+
+	for (i = 0; i < real_count; ++i) {
+		if ((q->buffer[i].type & ONIC_TX_SKB ) && q->buffer[i].skb) {
+			netdev_err(priv->netdev, "Weird, skb is not NULL\n");
+		} else if ((q->buffer[i].type & (ONIC_TX_XDPF || ONIC_TX_XDPF_XMIT)) && q->buffer[i].xdpf) {
+			netdev_err(priv->netdev, "Weird, skb is not NULL\n");
+		}
+	}
 
 	if (ring->desc)
 		dma_free_coherent(&priv->pdev->dev, size, ring->desc,
@@ -704,7 +733,7 @@ static void onic_clear_rx_queue(struct onic_private *priv, u16 qid)
 		// the third argument is "bool allow_direct", and it tells the allocator if the page was
 		// freed by the consumer, allow lockless caching.
 		// TODO: puttting to false shouldn't cause any problems, understand when to use true
-		page_pool_put_full_page(q->page_pool, pg,false);
+		page_pool_put_full_page(q->page_pool, pg, false);
 	}
 
 	if (q->buffer) kfree(q->buffer);
@@ -1036,7 +1065,7 @@ netdev_tx_t onic_xmit_frame(struct sk_buff *skb, struct net_device *dev)
 	desc.metadata = skb->len;
 	qdma_pack_h2c_st_desc(desc_ptr, &desc);
 
-	q->buffer[ring->next_to_use].type = ONIC_TX_BUF_TYPE_SKB;
+	q->buffer[ring->next_to_use].type = ONIC_TX_SKB;
 	q->buffer[ring->next_to_use].skb = skb;
 	q->buffer[ring->next_to_use].dma_addr = dma_addr;
 	q->buffer[ring->next_to_use].len = skb->len;
@@ -1165,13 +1194,6 @@ int onic_xdp_xmit(struct net_device *dev, int n, struct xdp_frame **frames, u32 
 
 	tx_queue =  onic_xdp_tx_queue_mapping(priv);
 
-	if (!priv->xdp_prog) {
-		netdev_err(dev, "No XDP program");
-		tx_queue->xdp_tx_stats.xdp_xmit_err++;
-		return -ENXIO;
-	}
-
-
 	if (unlikely(flags & ~XDP_XMIT_FLAGS_MASK)){
 			netdev_err(dev, "Invalid flags");
 		tx_queue->xdp_tx_stats.xdp_xmit_err++;
@@ -1187,7 +1209,7 @@ int onic_xdp_xmit(struct net_device *dev, int n, struct xdp_frame **frames, u32 
 		int err;
 
 		err = 0;
-		err = onic_xmit_xdp_ring(priv, tx_queue, frame,true);
+		err = onic_xmit_xdp_ring(priv, tx_queue, frame, true);
 		if (err != ONIC_XDP_TX) {
 			xdp_return_frame_rx_napi(frame);
 			netdev_err(dev, "Failed to transmit frame");
@@ -1197,7 +1219,14 @@ int onic_xdp_xmit(struct net_device *dev, int n, struct xdp_frame **frames, u32 
 			tx_queue->xdp_tx_stats.xdp_xmit++;
 		}
 	}
+
+	if (flags & XDP_XMIT_FLUSH) {
+		wmb();
+		onic_set_tx_head(priv->hw.qdma, tx_queue->qid, tx_queue->ring.next_to_use);
+	}
 	__netif_tx_unlock(nq);
+
+
 
 	return n - drops;
 }
