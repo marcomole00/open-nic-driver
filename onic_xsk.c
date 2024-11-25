@@ -17,37 +17,38 @@ int onic_xsk_xmit(struct onic_private *priv, struct onic_tx_queue *q, int budget
 	dma_addr_t dma_addr;
 	struct onic_ring *ring = &q->ring;
 	struct qdma_h2c_st_desc desc;
-	struct xdp_desc *xdp_desc = q->xsk_pool->tx_descs;
+	struct xdp_desc xdp_desc;
 	int trasmitted = 0;
 	while (budget--)
 	{
 		// xsk_tx_peek_desc it's the function that fetches the xdp frames from the
 		// TX ring of the xsk buff pool
-		if (!xsk_tx_peek_desc(q->xsk_pool, xdp_desc))
+		if (!xsk_tx_peek_desc(q->xsk_pool, &xdp_desc))
 		{
 			break;
 		}
 		trasmitted++;
-		dma_addr = xsk_buff_raw_get_dma(q->xsk_pool,xdp_desc->addr);
+		dma_addr = xsk_buff_raw_get_dma(q->xsk_pool, xdp_desc.addr);
 		xsk_buff_raw_dma_sync_for_device(q->xsk_pool, dma_addr,
-										 xdp_desc->len);
+										 xdp_desc.len);
 
 		desc_ptr = ring->desc + QDMA_H2C_ST_DESC_SIZE * ring->next_to_use;
-		desc.len = xdp_desc->len;
+		desc.len = xdp_desc.len;
 		desc.src_addr = dma_addr;
-		desc.metadata = xdp_desc->len;
+		desc.metadata = xdp_desc.len;
 		qdma_pack_h2c_st_desc(desc_ptr, &desc);
 
 		// the problem here is: the reclaiming of the pages is handled by the xsk api
 		// q->buffer[ring->next_to_use].type = NULL; // THIS WILL BE DEFINED AFTER I REBASE THE CHANGES FROM THE OTHER BRANCH
 		q->buffer[ring->next_to_use].skb = NULL;
 		q->buffer[ring->next_to_use].dma_addr = dma_addr;
-		q->buffer[ring->next_to_use].len = xdp_desc->len;
+		q->buffer[ring->next_to_use].len = xdp_desc.len;
 
 		onic_ring_increment_head(ring);
 	}
 	if (trasmitted)
-		xsk_tx_completed(q->xsk_pool, trasmitted);
+		// this is wrong, this should be done in onic_tx_clean when we poll the completions 
+		xsk_tx_release(q->xsk_pool);
 	wmb();
 	onic_set_tx_head(priv->hw.qdma, q->qid, ring->next_to_use);
 	return trasmitted;
@@ -209,8 +210,9 @@ int onic_xsk_pool_disable(struct onic_private *priv, u16 qid)
 
 	return 0;
 }
-int onic_xsk_pool_setup(struct onic_private *priv, struct xsk_buff_pool *pool, u16 qid)
-{
+int onic_xsk_pool_setup(struct net_device *netdev, struct xsk_buff_pool *pool, u16 qid)
+{	
+	struct onic_private *priv = netdev_priv(netdev);
 
 	return pool ?  onic_xsk_pool_enable(priv, pool, qid) : onic_xsk_pool_disable(priv, qid);
 }

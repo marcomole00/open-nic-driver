@@ -390,7 +390,8 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 		if (qid == i && test_bit(qid,priv->af_xdp_zc_qps) && q->xsk_pool) 
 		{
 			budget -=	onic_xsk_xmit(priv,priv->tx_queue[qid],budget);
-		} else 	onic_tx_clean(priv->tx_queue[i]);
+		} 
+		onic_tx_clean(priv->tx_queue[i]);
 	}
 	cmpl_ptr =
 		cmpl_ring->desc + QDMA_C2H_CMPL_SIZE * cmpl_ring->next_to_clean;
@@ -1316,7 +1317,7 @@ int onic_xdp(struct net_device *dev, struct netdev_bpf *xdp) {
 			return onic_setup_xdp_prog(dev, xdp->prog);
 		case XDP_SETUP_XSK_POOL:
 			// TODO:: implement this, placeholder while i fix compilation issues
-			return -EINVAL;
+			return onic_xsk_pool_setup(dev, xdp->xsk.pool,xdp->xsk.queue_id);
 		default:
 			return -EINVAL;
 	}
