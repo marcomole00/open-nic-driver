@@ -1261,7 +1261,9 @@ inline void onic_get_stats64(struct net_device *dev, struct rtnl_link_stats64 *s
 	unsigned int cpu;
 	for_each_possible_cpu(cpu) {
 		pcpu_ptr = per_cpu_ptr(priv->netdev_stats, cpu);
-		
+		if (!pcpu_ptr) {
+			goto out;
+		}
 		
 		total_stats.rx_packets += pcpu_ptr->rx_packets;
 		total_stats.rx_bytes += pcpu_ptr->rx_bytes;
@@ -1270,7 +1272,7 @@ inline void onic_get_stats64(struct net_device *dev, struct rtnl_link_stats64 *s
 		total_stats.tx_errors += pcpu_ptr->tx_errors;
 		total_stats.tx_dropped += pcpu_ptr->tx_dropped;
 	}
-	
+out:
 	stats->tx_packets = total_stats.tx_packets;
 	stats->tx_bytes = total_stats.tx_bytes;
 	stats->rx_packets = total_stats.rx_packets;
@@ -1281,27 +1283,29 @@ inline void onic_get_stats64(struct net_device *dev, struct rtnl_link_stats64 *s
 
 
 static int onic_setup_xdp_prog(struct net_device *dev, struct bpf_prog *prog) {
-	// Since the maximum packet size is at most 1514, less than a page, and the rx
-	// buffer is one page in size, no need to check for size
 
 	struct onic_private *priv = netdev_priv(dev);
 	bool running = netif_running(dev);
-
 	bool need_reset;
 
 	struct bpf_prog *old_prog = xchg(&priv->xdp_prog, prog);
 	need_reset = (!!prog != !!old_prog);
 
 	if (need_reset && running) {
+		netdev_info(dev, "need reset and running");
 		onic_stop_netdev(dev);
 	} else {
+		
 		int i;
+		netdev_info(dev, "else branch with xchg");
 		for (i = 0; i < priv->num_rx_queues; i++) {
 			xchg(&priv->rx_queue[i]->xdp_prog, priv->xdp_prog);
 		}
 	}
-	if (old_prog)
+	if (old_prog){
+		netdev_info(dev, "putting old prog");
 		bpf_prog_put(old_prog);
+	}
 
 	/* bpf is just replaced, RXQ and MTU are already setup */
 	if (!need_reset)
@@ -1314,11 +1318,16 @@ static int onic_setup_xdp_prog(struct net_device *dev, struct bpf_prog *prog) {
 }
 
 int onic_xdp(struct net_device *dev, struct netdev_bpf *xdp) {
+	if (!xdp){
+		netdev_err(dev, "xdp is NULL");
+		return -EINVAL;
+	}
 	switch (xdp->command) {
 		case XDP_SETUP_PROG:
+			netdev_info(dev, "xdp setup prog");
 			return onic_setup_xdp_prog(dev, xdp->prog);
 		case XDP_SETUP_XSK_POOL:
-			// TODO:: implement this, placeholder while i fix compilation issues
+			netdev_info(dev, "xdp setup pool");
 			return onic_xsk_pool_setup(dev, xdp->xsk.pool,xdp->xsk.queue_id);
 		default:
 			return -EINVAL;

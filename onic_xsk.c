@@ -127,28 +127,29 @@ struct sk_buff *onic_xsk_construct_skb(struct napi_struct *napi, struct xdp_buff
 	return skb;
 }
 
- int onic_xsk_wakeup(struct net_device *dev, u16 qid, u32 flags)
-{
-	struct onic_private *priv = netdev_priv(dev);
-	struct onic_rx_queue *rx_queue = priv->rx_queue[qid];
+int onic_xsk_wakeup(struct net_device *dev, u16 qid, u32 flags) {
+  struct onic_private *priv = netdev_priv(dev);
+  struct onic_rx_queue *rx_queue = priv->rx_queue[qid];
 
-	// test that the queue exists and that it is an AF_XDP_ZC queue
-	if (qid >= priv->num_rx_queues || qid >= priv->num_tx_queues)
-		return -EINVAL;
+  // test that the queue exists and that it is an AF_XDP_ZC queue
+  if (qid >= priv->num_rx_queues || qid >= priv->num_tx_queues)
+    return -EINVAL;
 
-	if (!test_bit(qid,priv->af_xdp_zc_qps)  || !rx_queue->xsk_pool)
-		return -EINVAL;
+  if (!test_bit(qid, priv->af_xdp_zc_qps) || !rx_queue->xsk_pool) {
+    netdev_err(dev, "bit is not set or the pool pointer is null");
+    return -EINVAL;
+  }
 
-	if (!napi_if_scheduled_mark_missed(&rx_queue->napi))
-	{
-		// this is not ideal: the best thing would be to trigger an irq. The irq would maintain core affinity.
-		// instead i'm using a napi_schedule which will run on the current core.
-		// This shouldn't be a huge problems because napi context is a softirq and
-		// it guarantees that the same napi instance will not run on two different cores at the same time.
-		napi_schedule(&rx_queue->napi);
-	}
+  if (!napi_if_scheduled_mark_missed(&rx_queue->napi)) {
+    // this is not ideal: the best thing would be to trigger an irq. The irq
+    // would maintain core affinity. instead i'm using a napi_schedule which
+    // will run on the current core. This shouldn't be a huge problems because
+    // napi context is a softirq and it guarantees that the same napi instance
+    // will not run on two different cores at the same time.
+    napi_schedule(&rx_queue->napi);
+  }
 
-	return 0;
+  return 0;
 }
 
 /**
@@ -160,36 +161,35 @@ struct sk_buff *onic_xsk_construct_skb(struct napi_struct *napi, struct xdp_buff
  * return 0 on success, negative on failure
  */
 
- int onic_xsk_pool_enable(struct onic_private *priv, struct xsk_buff_pool *pool, u16 qid)
-{
+int onic_xsk_pool_enable(struct onic_private *priv, struct xsk_buff_pool *pool,
+                         u16 qid) {
 
-	int err;
-	bool if_running;
+  int err;
+  bool if_running;
 
-	if (qid >= priv->num_rx_queues || qid >= priv->num_tx_queues)
-		return -EINVAL;
+  if (qid >= priv->num_rx_queues || qid >= priv->num_tx_queues)
+    return -EINVAL;
 
-	err = xsk_pool_dma_map(pool, &priv->pdev->dev, DMA_ATTR_SKIP_CPU_SYNC);
-	if (err)
-		return err;
+  err = xsk_pool_dma_map(pool, &priv->pdev->dev, DMA_ATTR_SKIP_CPU_SYNC);
+  if (err)
+    return err;
 
-	set_bit(qid, priv->af_xdp_zc_qps);
+  set_bit(qid, priv->af_xdp_zc_qps);
 
-	if_running = netif_running(priv->netdev);
+  if_running = netif_running(priv->netdev);
 
-	if (if_running)
-	{
-		// TODO
-		onic_queue_pair_disable(priv, qid);
-		onic_queue_pair_enable(priv, qid);
-		/* Kick start the NAPI context so that receiving will start */
-		err = onic_xsk_wakeup(priv->netdev, qid, XDP_WAKEUP_RX);
-		if (err)
-			return err;
-	}
-	return 0;
+  if (if_running) {
+    onic_queue_pair_disable(priv, qid);
+    onic_queue_pair_enable(priv, qid);
+    /* Kick start the NAPI context so that receiving will start */
+    err = onic_xsk_wakeup(priv->netdev, qid, XDP_WAKEUP_RX);
+    if (err) {
+      netdev_err(priv->netdev, "err in xsk wakeup");
+      return err;
+    }
+  }
+  return 0;
 }
-
 
 int onic_xsk_pool_disable(struct onic_private *priv, u16 qid)
 {
