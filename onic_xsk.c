@@ -171,8 +171,10 @@ int onic_xsk_pool_enable(struct onic_private *priv, struct xsk_buff_pool *pool,
     return -EINVAL;
 
   err = xsk_pool_dma_map(pool, &priv->pdev->dev, DMA_ATTR_SKIP_CPU_SYNC);
-  if (err)
+  if (err){
+
     return err;
+	}
 
   set_bit(qid, priv->af_xdp_zc_qps);
 

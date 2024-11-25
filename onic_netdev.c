@@ -901,6 +901,7 @@ err_free_pp:
 	u32 size, real_count;
 	int i, rv;
 	bool debug = 0;
+	int err;
 
 	if (priv->rx_queue[qid]) {
 		if (debug)
@@ -947,6 +948,18 @@ err_free_pp:
 			netdev_err(dev, "fatal error: xsk_pool is NULL at queue %d but the state bit is set", qid);
 			goto clear_rx_queue;
 		}
+
+
+		err = xdp_rxq_info_reg(&q->xdp_rxq, priv->netdev, q->qid, 0);
+		if (err)
+			goto clear_rx_queue;
+
+		err = xdp_rxq_info_reg_mem_model(&q->xdp_rxq, MEM_TYPE_XSK_BUFF_POOL,
+						NULL);
+		if (err)
+			goto clear_rx_queue;
+		
+		xsk_pool_set_rxq_info(q->xsk_pool, &q->xdp_rxq);
 
 		// af_xdp zero copy allocator stuff
 		q->xdps = kcalloc(real_count, sizeof(struct xdp_buff *), GFP_KERNEL);
@@ -1328,7 +1341,7 @@ int onic_xdp(struct net_device *dev, struct netdev_bpf *xdp) {
 			return onic_setup_xdp_prog(dev, xdp->prog);
 		case XDP_SETUP_XSK_POOL:
 			netdev_info(dev, "xdp setup pool");
-			return onic_xsk_pool_setup(dev, xdp->xsk.pool,xdp->xsk.queue_id);
+			return onic_xsk_pool_setup(dev, xdp->xsk.pool, xdp->xsk.queue_id);
 		default:
 			return -EINVAL;
 	}
