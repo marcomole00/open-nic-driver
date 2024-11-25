@@ -59,57 +59,59 @@ inline  void onic_ring_increment_tail(struct onic_ring *ring)
 	ring->next_to_clean = (ring->next_to_clean + 1) % real_count;
 }
 
-void onic_tx_clean(struct onic_tx_queue *q)
-{
-	struct onic_private *priv = netdev_priv(q->netdev);
-	struct onic_ring *ring = &q->ring;
-	struct qdma_wb_stat wb;
-	int work, i;
+void onic_tx_clean(struct onic_tx_queue *q) {
+  struct onic_private *priv = netdev_priv(q->netdev);
+  struct onic_ring *ring = &q->ring;
+  struct qdma_wb_stat wb;
+  int work, i,xsk_trasmitted = 0;
 
-	// this is a locking mechanism to guarantee that only one thread is cleaning the ring
-	// bitmask functions are atomic!
-	if (test_and_set_bit(0, q->state))
-		return;
+  // this is a locking mechanism to guarantee that only one thread is cleaning
+  // the ring bitmask functions are atomic!
+  if (test_and_set_bit(0, q->state))
+    return;
 
-	qdma_unpack_wb_stat(&wb, ring->wb);
+  qdma_unpack_wb_stat(&wb, ring->wb);
 
-	if (wb.cidx == ring->next_to_clean) {
-		clear_bit(0, q->state);
-		return;
-	}
+  if (wb.cidx == ring->next_to_clean) {
+    clear_bit(0, q->state);
+    return;
+  }
 
-	work = wb.cidx - ring->next_to_clean;
-	if (work < 0)
-		work += onic_ring_get_real_count(ring);
+  work = wb.cidx - ring->next_to_clean;
+  if (work < 0)
+    work += onic_ring_get_real_count(ring);
 
-	for (i = 0; i < work; ++i) {
-		struct onic_tx_buffer *buf = &q->buffer[ring->next_to_clean];
+  for (i = 0; i < work; ++i) {
+    struct onic_tx_buffer *buf = &q->buffer[ring->next_to_clean];
 
+    if (buf->type == ONIC_TX_SKB) {
+      // The packet originated from the kernel network stack
+      dma_unmap_single(&priv->pdev->dev, buf->dma_addr, buf->len,
+                       DMA_TO_DEVICE);
+      dev_kfree_skb_any(buf->skb);
+      buf->skb = NULL;
+    } else if (buf->type == ONIC_TX_XDPF) {
+      // The packet originated from a XDP_TX -> It comes from a page pool, no
+      // need to dma unmap
+      xdp_return_frame(buf->xdpf);
+      buf->xdpf = NULL;
+    } else if (buf->type == ONIC_TX_XDPF_XMIT) {
+      // The packet originated from the XDP program of another driver.
+      // It was mapped to a DMA address and needs to be unmapped
+      dma_unmap_single(&priv->pdev->dev, buf->dma_addr, buf->len,
+                       DMA_TO_DEVICE);
+      xdp_return_frame(buf->xdpf);
+      buf->xdpf = NULL;
+    } else if (buf->type == ONIC_TX_XSK) {
+      xsk_trasmitted++;
+    } else {
+      netdev_err(priv->netdev, "unknown buffer type %d\n", buf->type);
+    }
 
-		if (buf->type == ONIC_TX_SKB) {
-			// The packet originated from the kernel network stack
-			dma_unmap_single(&priv->pdev->dev, buf->dma_addr, buf->len, DMA_TO_DEVICE);
-			dev_kfree_skb_any(buf->skb);
-			buf->skb = NULL;
-		}  else if (buf->type == ONIC_TX_XDPF) {
-			// The packet originated from a XDP_TX -> It comes from a page pool, no need to dma unmap
-			xdp_return_frame(buf->xdpf);
-			buf->xdpf = NULL;
-		} else if (buf->type == ONIC_TX_XDPF_XMIT) {
-			// The packet originated from the XDP program of another driver. 
-			// It was mapped to a DMA address and needs to be unmapped
-			dma_unmap_single(&priv->pdev->dev, buf->dma_addr, buf->len, DMA_TO_DEVICE);
-			xdp_return_frame(buf->xdpf);
-			buf->xdpf = NULL;
-		}
-		 else {
-			netdev_err(priv->netdev, "unknown buffer type %d\n", buf->type);
-		}
-
-		onic_ring_increment_tail(ring);
-	}
-
-	clear_bit(0, q->state);
+    onic_ring_increment_tail(ring);
+  }
+	 if (xsk_trasmitted) xsk_tx_completed(q->xsk_pool, xsk_trasmitted);
+  clear_bit(0, q->state);
 }
 
 static bool onic_rx_high_watermark(struct onic_rx_queue *q)

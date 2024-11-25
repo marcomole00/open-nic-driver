@@ -43,7 +43,8 @@ enum onic_tx_buf_type {
 	ONIC_TX_SKB = BIT(0),
 	ONIC_TX_XDPF = BIT(1),
 	ONIC_TX_XDPF_XMIT = BIT(2),
-};
+	ONIC_TX_XSK = BIT(4),
+	};
 
 struct onic_tx_buffer {
 	enum onic_tx_buf_type type;

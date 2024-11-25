@@ -39,15 +39,14 @@ int onic_xsk_xmit(struct onic_private *priv, struct onic_tx_queue *q, int budget
 		qdma_pack_h2c_st_desc(desc_ptr, &desc);
 
 		// the problem here is: the reclaiming of the pages is handled by the xsk api
-		// q->buffer[ring->next_to_use].type = NULL; // THIS WILL BE DEFINED AFTER I REBASE THE CHANGES FROM THE OTHER BRANCH
-		q->buffer[ring->next_to_use].skb = NULL;
+		q->buffer[ring->next_to_use].type = ONIC_TX_XSK;
+		q->buffer[ring->next_to_use].xdpf = NULL;
 		q->buffer[ring->next_to_use].dma_addr = dma_addr;
 		q->buffer[ring->next_to_use].len = xdp_desc.len;
 
 		onic_ring_increment_head(ring);
 	}
 	if (trasmitted)
-		// this is wrong, this should be done in onic_tx_clean when we poll the completions 
 		xsk_tx_release(q->xsk_pool);
 	wmb();
 	onic_set_tx_head(priv->hw.qdma, q->qid, ring->next_to_use);
