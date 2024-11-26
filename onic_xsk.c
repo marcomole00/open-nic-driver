@@ -234,10 +234,13 @@ void onic_queue_pair_disable(struct onic_private *priv, u16 qid)
 	// gro_receive (here we're not in napi context) ? Or i just de alloc all the pages and i ignore the question.
 	// for now i'll go with the second option.
 
+	netdev_info(priv->netdev, "Disabling tx queue %d", qid);
 	netif_tx_stop_queue(txq);
-
+	netdev_info(priv->netdev, "cleaning tx queue %d", qid);
 	onic_tx_clean(priv->tx_queue[qid]);
+	netdev_info(priv->netdev, "clearing rx queue %d", qid);
 	onic_clear_rx_queue(priv, qid);
+	netdev_info(priv->netdev, "clearing tx queue %d", qid);
 	onic_clear_tx_queue(priv, qid);
 }
 
