@@ -30,6 +30,7 @@
 #include "onic_lib.h"
 #include "onic_common.h"
 #include "onic_netdev.h"
+#include "onic_xsk.h"
 
 #undef CMS_SUPPORT    /* Need CMS IP in the design @320000 offset */
 
@@ -137,6 +138,7 @@ static const struct net_device_ops onic_netdev_ops = {
 // For why we do this, see onic_netdev.c:onix_xdp_run
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 3, 0)
 	.ndo_xdp_xmit = onic_xdp_xmit,
+	.ndo_xsk_wakeup = onic_xsk_wakeup,
 #elif defined(RHEL_RELEASE_CODE)
 #if RHEL_RELEASE_CODE >= RHEL_RELEASE_VERSION(8, 1))
 	.ndo_xdp_xmit = onic_xdp_xmit,

@@ -21,7 +21,7 @@ int onic_xsk_pool_setup(struct net_device *netdev, struct xsk_buff_pool *pool, u
 int onic_xsk_xmit(struct onic_private *priv, struct onic_tx_queue *q, int budget);
 int onic_run_xdp_zc(struct onic_rx_queue *rx_queue, struct xdp_buff *xdp_buff);
 struct sk_buff *onic_xsk_construct_skb(struct napi_struct *napi, struct xdp_buff *xdp);
-int onic_xsk_wakeup(struct net_device *dev, u16 qid, u32 flags);
+int onic_xsk_wakeup(struct net_device *dev, u32 qid, u32 flags);
 int onic_xsk_pool_enable(struct onic_private *priv, struct xsk_buff_pool *pool, u16 qid);
 void onic_queue_pair_disable(struct onic_private *priv, u16 qid);
 void onic_queue_pair_enable(struct onic_private *priv, u16 qid);

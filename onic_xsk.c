@@ -127,7 +127,7 @@ struct sk_buff *onic_xsk_construct_skb(struct napi_struct *napi, struct xdp_buff
 	return skb;
 }
 
-int onic_xsk_wakeup(struct net_device *dev, u16 qid, u32 flags) {
+int onic_xsk_wakeup(struct net_device *dev, u32 qid, u32 flags) {
   struct onic_private *priv = netdev_priv(dev);
   struct onic_rx_queue *rx_queue = priv->rx_queue[qid];
 
