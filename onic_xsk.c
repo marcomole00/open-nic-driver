@@ -135,6 +135,11 @@ int onic_xsk_wakeup(struct net_device *dev, u32 qid, u32 flags) {
   if (qid >= priv->num_rx_queues || qid >= priv->num_tx_queues)
     return -EINVAL;
 
+	if(!rx_queue){
+		netdev_err(dev, "rx_queue is null");
+		return -EINVAL;
+	}
+
   if (!test_bit(qid, priv->af_xdp_zc_qps) || !rx_queue->xsk_pool) {
     netdev_err(dev, "bit is not set or the pool pointer is null");
     return -EINVAL;
@@ -226,11 +231,6 @@ void onic_queue_pair_disable(struct onic_private *priv, u16 qid)
 	netdev_info(priv->netdev, "Disabling queue pair %d", qid);
 	onic_disable_q_vector(priv->q_vector[qid]);
 	
-	// disable napi (if there is a napi instance running this will block until it is done)
-	netdev_info(priv->netdev, "Disabling napi for queue pair %d", qid);
-	napi_disable(&priv->rx_queue[qid]->napi);
-
-	// after disabling the napi i have a doubt: do i have to consume the packets that may be still in the queue ,something like
 	// gro_receive (here we're not in napi context) ? Or i just de alloc all the pages and i ignore the question.
 	// for now i'll go with the second option.
 

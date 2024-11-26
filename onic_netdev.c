@@ -1080,6 +1080,7 @@ err_free_pp:
 	return 0;
 
 clear_rx_queue:
+	netdev_err(dev, "onic_init_rx_queue %d failed, err = %d", qid, rv);
 	onic_clear_rx_queue(priv, qid);
 	return rv;
 }
