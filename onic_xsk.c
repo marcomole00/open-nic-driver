@@ -172,7 +172,7 @@ int onic_xsk_pool_enable(struct onic_private *priv, struct xsk_buff_pool *pool,
 
   err = xsk_pool_dma_map(pool, &priv->pdev->dev, DMA_ATTR_SKIP_CPU_SYNC);
   if (err){
-
+	netdev_err(priv->netdev, "Error in xsk pool dma map");
     return err;
 	}
 
@@ -223,8 +223,11 @@ void onic_queue_pair_disable(struct onic_private *priv, u16 qid)
 
 	struct netdev_queue *txq = netdev_get_tx_queue(priv->netdev, qid);
 	// disable interrupts for the queue
+	netdev_info(priv->netdev, "Disabling queue pair %d", qid);
 	onic_disable_q_vector(priv->q_vector[qid]);
+	
 	// disable napi (if there is a napi instance running this will block until it is done)
+	netdev_info(priv->netdev, "Disabling napi for queue pair %d", qid);
 	napi_disable(&priv->rx_queue[qid]->napi);
 
 	// after disabling the napi i have a doubt: do i have to consume the packets that may be still in the queue ,something like
@@ -244,7 +247,7 @@ void onic_queue_pair_enable(struct onic_private *priv, u16 qid)
 	// struct onic_rx_queue *rx_queue = priv->rx_queue[qid];
 	// int real_count = onic_ring_get_real_count(&priv->rx_queue[qid]->ring);
 	struct netdev_queue *txq = netdev_get_tx_queue(priv->netdev, qid);
-
+	netdev_info(priv->netdev, "Enabling queue pair %d", qid);
 	// this already enables napi
 	onic_init_rx_queue(priv, qid);
 	onic_init_tx_queue(priv, qid);
