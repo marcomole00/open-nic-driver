@@ -129,13 +129,50 @@ static bool onic_rx_high_watermark(struct onic_rx_queue *q)
 static void onic_rx_refill(struct onic_rx_queue *q)
 {
 	struct onic_private *priv = netdev_priv(q->netdev);
-	struct onic_ring *ring = &q->desc_ring;
+	struct onic_ring *desc_ring = &q->desc_ring;
+	struct qdma_c2h_st_desc desc;
+	int i = 0;
+	u8 *desc_ptr = desc_ring->desc + QDMA_C2H_ST_DESC_SIZE * desc_ring->next_to_use;
 
-	ring->next_to_use += ONIC_RX_DESC_STEP;
-	ring->next_to_use %= onic_ring_get_real_count(ring);
+	for (i = 0; i < ONIC_RX_DESC_STEP; i++)
+	{
+		if (q->xsk_pool)
+		{
+			struct xdp_buff *xdp_buff;
+			xdp_buff = xsk_buff_alloc(q->xsk_pool);
+			if (!xdp_buff)
+			{
+				netdev_err(q->netdev, "xsk_buff_alloc failed\n");
+				// this is a problem
+				return;
+			}
+			q->xdps[desc_ring->next_to_use] = xdp_buff;
+			desc.dst_addr = xsk_buff_xdp_get_dma(xdp_buff);
+		}
+		else
+		{
+			struct page *pg;
+			// TODO: this may fail , handle this case
+			pg = page_pool_dev_alloc_pages(q->page_pool);
+			if (!pg)
+			{
+				netdev_err(q->netdev, "page_pool_dev_alloc_pages failed\n");
+				return;
+			}
 
-	onic_set_rx_head(priv->hw.qdma, q->qid, ring->next_to_use);
+			q->buffer[desc_ring->next_to_use].pg = pg;
+			q->buffer[desc_ring->next_to_use].offset = XDP_PACKET_HEADROOM;
 
+			desc.dst_addr = page_pool_get_dma_addr(pg) + XDP_PACKET_HEADROOM;
+		}
+
+		qdma_pack_c2h_st_desc(desc_ptr, &desc);
+	}
+
+	desc_ring->next_to_use += ONIC_RX_DESC_STEP;
+	desc_ring->next_to_use %= onic_ring_get_real_count(desc_ring);
+
+	onic_set_rx_head(priv->hw.qdma, q->qid, desc_ring->next_to_use);
 }
 
 //TODO: think about what to do in case of failures in memory allocation
@@ -908,7 +945,8 @@ err_free_pp:
 	int i, rv;
 	bool debug = 0;
 	int err;
-
+	int buffers_allocated = 0;
+	
 	if (priv->rx_queue[qid]) {
 		if (debug)
 			netdev_info(dev, "Re-initializing RX queue %d", qid);
@@ -975,16 +1013,17 @@ err_free_pp:
 		}
 
 		netdev_info(dev, "free_list_cnt %d, free_heads_cnt %d", q->xsk_pool->free_list_cnt, q->xsk_pool->free_heads_cnt);
-		for (i = 0; i < real_count; ++i) {
+		for (i = 0; i < ONIC_RX_DESC_STEP; ++i) {
 			q->xdps[i] = xsk_buff_alloc(q->xsk_pool);
 			if (!q->xdps[i]) {
 				netdev_err(dev, "xsk_buff_alloc failed at %d", i);
-				rv = -ENOMEM; // TODO it fails here, why?
-				goto clear_rx_queue;
+				break;
 			}
 		}
 
-		for (i=0; i < real_count; ++i) {
+		buffers_allocated = i;
+
+		for (i=0; i < buffers_allocated; ++i) {
 
 			u8 *desc_ptr = ring->desc + QDMA_C2H_ST_DESC_SIZE * i;
 			struct qdma_c2h_st_desc desc;
@@ -1007,21 +1046,22 @@ err_free_pp:
 			goto clear_rx_queue;
 		
 
-		for (i = 0; i < real_count; ++i) {
+		for (i = 0; i < ONIC_RX_DESC_STEP; ++i) {
 			struct page *pg = page_pool_dev_alloc_pages(q->page_pool);
 
 			if (!pg) {
 				netdev_err(dev, "page_pool_dev_alloc_pages failed at %d", i);
-				rv = -ENOMEM;
-				goto clear_rx_queue;
+				break;
 			}
 
 			q->buffer[i].pg = pg;
 			q->buffer[i].offset = XDP_PACKET_HEADROOM;
 		}
 
+		buffers_allocated = i;
+
 		/* map pages and initialize descriptors */
-		for (i = 0; i < real_count; ++i) {
+		for (i = 0; i < buffers_allocated ; ++i) {
 			u8 *desc_ptr = ring->desc + QDMA_C2H_ST_DESC_SIZE * i;
 			struct qdma_c2h_st_desc desc;
 			struct page *pg = q->buffer[i].pg;
@@ -1080,7 +1120,7 @@ err_free_pp:
 		goto clear_rx_queue;
 
 	/* fill RX descriptor ring with a few descriptors */
-	q->desc_ring.next_to_use = ONIC_RX_DESC_STEP;
+	q->desc_ring.next_to_use =  min(buffers_allocated , ONIC_RX_DESC_STEP);
 	onic_set_rx_head(priv->hw.qdma, qid, q->desc_ring.next_to_use);
 	onic_set_completion_tail(priv->hw.qdma, qid, 0, 1);
 
