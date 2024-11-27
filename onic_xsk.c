@@ -208,7 +208,7 @@ int onic_xsk_pool_disable(struct onic_private *priv, u16 qid)
 	clear_bit(qid, priv->af_xdp_zc_qps);
 	priv->rx_queue[qid]->xsk_pool = NULL;
 	xsk_pool_dma_unmap(pool, DMA_ATTR_SKIP_CPU_SYNC);
-	
+
 	onic_queue_pair_disable(priv, qid);
 	onic_queue_pair_enable(priv, qid);
 
@@ -219,7 +219,12 @@ int onic_xsk_pool_setup(struct net_device *netdev, struct xsk_buff_pool *pool, u
 {	
 	struct onic_private *priv = netdev_priv(netdev);
 
-	return pool ?  onic_xsk_pool_enable(priv, pool, qid) : onic_xsk_pool_disable(priv, qid);
+	if (pool) {
+		return onic_xsk_pool_enable(priv, pool, qid);
+	} else {
+		netdev_info(netdev, "Disabling xsk pool for queue %d", qid);
+		return onic_xsk_pool_disable(priv, qid);
+	}
 }
 
 void onic_queue_pair_disable(struct onic_private *priv, u16 qid)

@@ -450,7 +450,13 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 
 		int len = cmpl.pkt_len;
 
-		if (q->xsk_pool)
+
+		if (!!q->xsk_pool != !!test_bit(qid, priv->af_xdp_zc_qps))
+		{
+			netdev_err(q->netdev, "xsk_pool and af_xdp_zc_qps are not in sync");
+		}
+
+		if (q->xsk_pool && test_bit(qid, priv->af_xdp_zc_qps))
 		{
 			struct xdp_buff *xdp_buff = q->xdps[desc_ring->next_to_clean];
 			// todo copy from consume_zc
