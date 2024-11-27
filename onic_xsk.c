@@ -206,14 +206,13 @@ int onic_xsk_pool_disable(struct onic_private *priv, u16 qid)
 
 
 	clear_bit(qid, priv->af_xdp_zc_qps);
-	//TODO
+	priv->rx_queue[qid]->xsk_pool = NULL;
+	xsk_pool_dma_unmap(pool, DMA_ATTR_SKIP_CPU_SYNC);
+	
 	onic_queue_pair_disable(priv, qid);
 	onic_queue_pair_enable(priv, qid);
 
-	xsk_pool_dma_unmap(pool, DMA_ATTR_SKIP_CPU_SYNC);
-
-
-
+	
 	return 0;
 }
 int onic_xsk_pool_setup(struct net_device *netdev, struct xsk_buff_pool *pool, u16 qid)

@@ -968,10 +968,11 @@ err_free_pp:
 			goto clear_rx_queue;
 		}
 
+		netdev_info(dev, "free_list_cnt %d, free_heads_cnt %d", q->xsk_pool->free_list_cnt, q->xsk_pool->free_heads_cnt);
 		for (i = 0; i < real_count; ++i) {
 			q->xdps[i] = xsk_buff_alloc(q->xsk_pool);
 			if (!q->xdps[i]) {
-				rv = -ENOMEM;
+				rv = -ENOMEM; // TODO it fails here, why?
 				goto clear_rx_queue;
 			}
 		}
