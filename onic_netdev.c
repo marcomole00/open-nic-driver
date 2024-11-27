@@ -978,6 +978,7 @@ err_free_pp:
 		for (i = 0; i < real_count; ++i) {
 			q->xdps[i] = xsk_buff_alloc(q->xsk_pool);
 			if (!q->xdps[i]) {
+				netdev_err(dev, "xsk_buff_alloc failed at %d", i);
 				rv = -ENOMEM; // TODO it fails here, why?
 				goto clear_rx_queue;
 			}

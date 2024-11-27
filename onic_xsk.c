@@ -174,7 +174,7 @@ int onic_xsk_pool_enable(struct onic_private *priv, struct xsk_buff_pool *pool,
 
   if (qid >= priv->num_rx_queues || qid >= priv->num_tx_queues)
     return -EINVAL;
-
+	
   err = xsk_pool_dma_map(pool, &priv->pdev->dev, DMA_ATTR_SKIP_CPU_SYNC);
   if (err){
 	netdev_err(priv->netdev, "Error in xsk pool dma map");
