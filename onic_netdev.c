@@ -175,46 +175,6 @@ static void onic_rx_refill(struct onic_rx_queue *q)
 	onic_set_rx_head(priv->hw.qdma, q->qid, desc_ring->next_to_use);
 }
 
-//TODO: think about what to do in case of failures in memory allocation
-// a solution could be to keep a buffer of unfilled descriptors, fill the buffer whenever there is a memory allocation
-// failure and in later instances of page refill try to populate also the old ones.
-static void onic_rx_page_refill(struct onic_rx_queue *q)
-{
-	struct onic_ring *desc_ring = &q->desc_ring;
-	struct qdma_c2h_st_desc desc;
-	u8 *desc_ptr = desc_ring->desc + QDMA_C2H_ST_DESC_SIZE * desc_ring->next_to_clean;
-
-	if (q->xsk_pool)
-	{
-		struct xdp_buff *xdp_buff;
-		xdp_buff = xsk_buff_alloc(q->xsk_pool);
-		if (!xdp_buff)
-		{
-			netdev_err(q->netdev, "xsk_buff_alloc failed\n");
-			// this is a problem
-			return;
-		}
-		q->xdps[desc_ring->next_to_clean] = xdp_buff;
-		desc.dst_addr = xsk_buff_xdp_get_dma(xdp_buff);
-	}
-	else
-	{
-		struct page *pg;
-		// TODO: this may fail , handle this case
-		pg = page_pool_dev_alloc_pages(q->page_pool);
-		if (!pg) {
-			netdev_err(q->netdev, "page_pool_dev_alloc_pages failed\n");
-			return;
-		}
-
-		q->buffer[desc_ring->next_to_clean].pg = pg;
-		q->buffer[desc_ring->next_to_clean].offset = XDP_PACKET_HEADROOM;
-
-		desc.dst_addr = page_pool_get_dma_addr(pg) + XDP_PACKET_HEADROOM;
-	}
-
-	qdma_pack_c2h_st_desc(desc_ptr, &desc);
-}
 
 static struct onic_tx_queue *onic_xdp_tx_queue_mapping(struct onic_private *priv)
 {
@@ -576,12 +536,6 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 			}
 		}
 
-
-		// here the page where packet data was written has either been recycled or marked for recycling
-		//TODO: keep track of the how much pages have been used and batch this at the end of the loop?
-		// try it and perf it to see if there are any differences
-		onic_rx_page_refill(q);
-
 		pcpu_stats_pointer->rx_packets++;
 		pcpu_stats_pointer->rx_bytes += len;
 
@@ -834,6 +788,8 @@ void onic_clear_rx_queue(struct onic_private *priv, u16 qid)
 	struct onic_ring *ring;
 	u32 size, real_count;
 	int i;
+	int ntc = q->desc_ring.next_to_clean;
+	int ntu = q->desc_ring.next_to_use;
 
 	if (!q)
 		return;
@@ -861,7 +817,7 @@ void onic_clear_rx_queue(struct onic_private *priv, u16 qid)
 		dma_free_coherent(&priv->pdev->dev, size, ring->desc,
 				  ring->dma_addr);
 
-	for (i = 0; i < real_count; ++i) {
+	for (i = ntc; i < ntu; ++i) {
 		
 		if (q->page_pool){
 			struct page *pg = q->buffer[i].pg;
