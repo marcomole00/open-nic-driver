@@ -847,11 +847,11 @@ void onic_clear_rx_queue(struct onic_private *priv, u16 qid)
 		if (q->buffer) kfree(q->buffer);
 		page_pool_destroy(q->page_pool);
 		q->page_pool = NULL;
-		kfree(q);
-		priv->rx_queue[qid] = NULL;
 	}
 	
 	
+	kfree(q);
+	priv->rx_queue[qid] = NULL;
 	if (xdp_rxq_info_is_reg(&q->xdp_rxq))
 		xdp_rxq_info_unreg(&q->xdp_rxq);
 	
