@@ -270,8 +270,6 @@ void onic_disable_q_vector(struct onic_q_vector *vec)
 {
 	// disable then synchronize the queue vector interrupt
 	disable_irq(pci_irq_vector(vec->priv->pdev, vec->vid));
-	// synchronize_irq blocks until the last handler has finished
-	synchronize_irq(pci_irq_vector(vec->priv->pdev, vec->vid));
 
 }
 

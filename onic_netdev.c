@@ -607,6 +607,12 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 				cmpl.color);
 	}
 
+		if (onic_rx_high_watermark(q)) {
+			netdev_dbg(q->netdev, "High watermark: h = %d, t = %d",
+				   desc_ring->next_to_use,
+				   desc_ring->next_to_clean);
+			onic_rx_refill(q);
+		}
 	if (xdp_xmit & ONIC_XDP_REDIR)
 		xdp_do_flush();
 
