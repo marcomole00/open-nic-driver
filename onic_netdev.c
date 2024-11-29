@@ -126,55 +126,55 @@ static bool onic_rx_high_watermark(struct onic_rx_queue *q)
 	return (unused < (ONIC_RX_DESC_STEP / 2));
 }
 
-static void onic_rx_refill(struct onic_rx_queue *q)
-{
-	struct onic_private *priv = netdev_priv(q->netdev);
-	struct onic_ring *desc_ring = &q->desc_ring;
-	struct qdma_c2h_st_desc desc;
-	int i = 0;
-	u8 *desc_ptr = desc_ring->desc + QDMA_C2H_ST_DESC_SIZE * desc_ring->next_to_use;
+//TODO CHECK IF THIS WORKS CORRECTLY, PUT DEBUG INFORMATION IN CRITICAL PATH
+static void onic_rx_refill(struct onic_rx_queue *q) {
+  struct onic_private *priv = netdev_priv(q->netdev);
+  struct onic_ring *desc_ring = &q->desc_ring;
+  struct qdma_c2h_st_desc desc;
+  int i = 0;
+  int buffers_allocated = 0;
+  u8 *desc_ptr =
+      desc_ring->desc + QDMA_C2H_ST_DESC_SIZE * desc_ring->next_to_use;
 
-	for (i = 0; i < ONIC_RX_DESC_STEP; i++)
-	{
-		if (q->xsk_pool)
-		{
-			struct xdp_buff *xdp_buff;
-			xdp_buff = xsk_buff_alloc(q->xsk_pool);
-			if (!xdp_buff)
-			{
-				netdev_err(q->netdev, "xsk_buff_alloc failed\n");
-				// this is a problem
-				return;
-			}
-			q->xdps[desc_ring->next_to_use] = xdp_buff;
-			desc.dst_addr = xsk_buff_xdp_get_dma(xdp_buff);
-		}
-		else
-		{
-			struct page *pg;
-			// TODO: this may fail , handle this case
-			pg = page_pool_dev_alloc_pages(q->page_pool);
-			if (!pg)
-			{
-				netdev_err(q->netdev, "page_pool_dev_alloc_pages failed\n");
-				return;
-			}
+  netdev_info(priv->netdev, "%s ntc %d ntu %d", __func__,
+              desc_ring->next_to_clean, desc_ring->next_to_use);
+  for (i = 0; i < ONIC_RX_DESC_STEP; i++)
 
-			q->buffer[desc_ring->next_to_use].pg = pg;
-			q->buffer[desc_ring->next_to_use].offset = XDP_PACKET_HEADROOM;
+  {
+    if (q->xsk_pool) {
+      struct xdp_buff *xdp_buff;
+      xdp_buff = xsk_buff_alloc(q->xsk_pool);
+      if (!xdp_buff) {
+        netdev_err(q->netdev, "xsk_buff_alloc failed\n");
+        break;
+      }
+      buffers_allocated++;
+      q->xdps[desc_ring->next_to_use] = xdp_buff;
+      desc.dst_addr = xsk_buff_xdp_get_dma(xdp_buff);
+    } else {
+      struct page *pg;
+      pg = page_pool_dev_alloc_pages(q->page_pool);
+      if (!pg) {
+        netdev_err(q->netdev, "page_pool_dev_alloc_pages failed\n");
+        break;
+      }
 
-			desc.dst_addr = page_pool_get_dma_addr(pg) + XDP_PACKET_HEADROOM;
-		}
+      buffers_allocated++;
+      q->buffer[desc_ring->next_to_use].pg = pg;
+      q->buffer[desc_ring->next_to_use].offset = XDP_PACKET_HEADROOM;
 
-		qdma_pack_c2h_st_desc(desc_ptr, &desc);
-	}
+      desc.dst_addr = page_pool_get_dma_addr(pg) + XDP_PACKET_HEADROOM;
+    }
 
-	desc_ring->next_to_use += ONIC_RX_DESC_STEP;
-	desc_ring->next_to_use %= onic_ring_get_real_count(desc_ring);
+    qdma_pack_c2h_st_desc(desc_ptr, &desc);
+    onic_ring_increment_head(desc_ring);
+  }
 
-	onic_set_rx_head(priv->hw.qdma, q->qid, desc_ring->next_to_use);
+  // desc_ring->next_to_use += ONIC_RX_DESC_STEP;
+  // desc_ring->next_to_use %= onic_ring_get_real_count(desc_ring);
+
+  onic_set_rx_head(priv->hw.qdma, q->qid, desc_ring->next_to_use);
 }
-
 
 static struct onic_tx_queue *onic_xdp_tx_queue_mapping(struct onic_private *priv)
 {
