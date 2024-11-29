@@ -670,6 +670,8 @@ void onic_clear_tx_queue(struct onic_private *priv, u16 qid)
 	int real_count;
 	int i;
 
+	netdev_info(priv->netdev, "cleaning tx queue %d", qid);
+
 	if (!q)
 		return;
 
@@ -710,6 +712,7 @@ void onic_clear_tx_queue(struct onic_private *priv, u16 qid)
 	int rv;
 	bool debug = 0;
 
+	netdev_info(priv->netdev, "Init.ing tx queue %d",qid);
 	if (priv->tx_queue[qid]) {
 		if (debug)
 			netdev_info(dev, "Re-initializing TX queue %d", qid);
@@ -799,7 +802,8 @@ void onic_clear_rx_queue(struct onic_private *priv, u16 qid)
 	int i;
 	int ntc = q->desc_ring.next_to_clean;
 	int ntu = q->desc_ring.next_to_use;
-
+	
+	netdev_info(priv->netdev, "cleaning rx queue %d", qid);
 	if (!q)
 		return;
 
@@ -912,6 +916,7 @@ err_free_pp:
 	int err;
 	int buffers_allocated = 0;
 	
+	netdev_info(priv->netdev, "Init.ing rx  queue %d",qid);
 	if (priv->rx_queue[qid]) {
 		if (debug)
 			netdev_info(dev, "Re-initializing RX queue %d", qid);
