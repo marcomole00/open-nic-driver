@@ -74,6 +74,7 @@ int onic_run_xdp_zc(struct onic_rx_queue *rx_queue, struct xdp_buff *xdp_buff)
 	if (likely(act == XDP_REDIRECT))
 	{
 		err = xdp_do_redirect(rx_queue->netdev, xdp_buff, xdp_prog);
+		rx_queue->xdp_rx_stats.xdp_redirect++;
 		if (err)
 			goto failure;
 		return ONIC_XDP_REDIR;

@@ -32,6 +32,7 @@
 #include "qdma_access/qdma_register.h"
 #include "onic.h"
 #include "onic_xsk.h"
+#include "xclbin.h"
 
 #define ONIC_RX_DESC_STEP 256
 
@@ -172,7 +173,7 @@ static void onic_rx_refill(struct onic_rx_queue *q) {
 
   // desc_ring->next_to_use += ONIC_RX_DESC_STEP;
   // desc_ring->next_to_use %= onic_ring_get_real_count(desc_ring);
-
+	netdev_info(priv->netdev, "%s: allocated %d buffers, ntc %d ntu %d", __func__, buffers_allocated, desc_ring->next_to_clean, desc_ring->next_to_use);
   onic_set_rx_head(priv->hw.qdma, q->qid, desc_ring->next_to_use);
 }
 
@@ -385,6 +386,7 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 	struct rtnl_link_stats64 *pcpu_stats_pointer;
 	pcpu_stats_pointer = this_cpu_ptr(priv->netdev_stats);
 
+	if (debug) netdev_info(q->netdev, "%s qid %d", __func__, qid);
 	for (i = 0; i < priv->num_tx_queues; i++) {
 		if (qid == i && test_bit(qid,priv->af_xdp_zc_qps) && q->xsk_pool) 
 		{
@@ -460,6 +462,7 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 			xdp_buff->data_end = xdp_buff->data + len;
 			xsk_buff_dma_sync_for_cpu(xdp_buff, q->xsk_pool);
 			xdp_result = onic_run_xdp_zc(q, xdp_buff);
+			xdp_xmit |= xdp_result;
 			if (xdp_result == ONIC_XDP_CONSUMED)
 			{
 				xsk_buff_free(xdp_buff);
