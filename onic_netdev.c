@@ -831,7 +831,7 @@ void onic_clear_rx_queue(struct onic_private *priv, u16 qid)
 				  ring->dma_addr);
 
 	for (i = ntc; i < ntu; ++i) {
-		
+		netdev_info(priv->netdev, "clearing buffer %d out of %d", i, ntu);
 		if (q->page_pool){
 			struct page *pg = q->buffer[i].pg;
 			page_pool_put_full_page(q->page_pool, pg, false);
@@ -912,7 +912,7 @@ err_free_pp:
 	u16 vid;
 	u32 size, real_count;
 	int i, rv;
-	bool debug = 0;
+	bool debug = 1;
 	int err;
 	int buffers_allocated = 0;
 	
