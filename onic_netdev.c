@@ -459,11 +459,11 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 		if (q->xsk_pool && test_bit(qid, priv->af_xdp_zc_qps))
 		{
 				
+			struct xdp_buff *xdp_buff = q->xdps[desc_ring->next_to_clean];
 			if (!q->xdp_prog){
-				netdev_err("XSK pool is present with no XDP program. No further packet will be processed as this is a transient state");
+				netdev_err(q->netdev, "XSK pool is present with no XDP program. No further packet will be processed as this is a transient state");
 				break;
 			}
-			struct xdp_buff *xdp_buff = q->xdps[desc_ring->next_to_clean];
 			// todo copy from consume_zc
 			xdp_buff->data_end = xdp_buff->data + len;
 			xsk_buff_dma_sync_for_cpu(xdp_buff, q->xsk_pool);
