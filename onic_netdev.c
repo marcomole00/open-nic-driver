@@ -134,8 +134,6 @@ static void onic_rx_refill(struct onic_rx_queue *q) {
   struct qdma_c2h_st_desc desc;
   int i = 0;
   int buffers_allocated = 0;
-  u8 *desc_ptr =
-      desc_ring->desc + QDMA_C2H_ST_DESC_SIZE * desc_ring->next_to_use;
 
   netdev_info(priv->netdev, "%s @ q#%d  ntc %d ntu %d", __func__,
               q->qid,desc_ring->next_to_clean, desc_ring->next_to_use);
@@ -143,6 +141,8 @@ static void onic_rx_refill(struct onic_rx_queue *q) {
   for (i = 0; i < ONIC_RX_DESC_STEP; i++)
 
   {
+		u8 *desc_ptr =
+		    desc_ring->desc + QDMA_C2H_ST_DESC_SIZE * desc_ring->next_to_use;
     if (q->xsk_pool) {
       struct xdp_buff *xdp_buff;
       xdp_buff = xsk_buff_alloc(q->xsk_pool);
