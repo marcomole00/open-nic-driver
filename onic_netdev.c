@@ -667,7 +667,12 @@ out_of_budget:
 			pcpu_stats_pointer->rx_bytes);
 	return work;
 }
-
+int onic_ring_get_occupancy(struct onic_ring *ring) {
+	int ntc = ring->next_to_clean;
+	int ntu = ring->next_to_use;
+	
+	return ntu >= ntc ? ntu - ntc : ntu - ntc + onic_ring_get_real_count(ring);
+}
 void onic_clear_tx_queue(struct onic_private *priv, u16 qid)
 {
 	struct onic_tx_queue *q = priv->tx_queue[qid];
@@ -688,7 +693,8 @@ void onic_clear_tx_queue(struct onic_private *priv, u16 qid)
 	real_count = ring->count - 1;
 	size = QDMA_H2C_ST_DESC_SIZE * real_count + QDMA_WB_STAT_SIZE;
 	size = ALIGN(size, PAGE_SIZE);
-
+	netdev_info(q->netdev, "Cleaning QTX #%d ntc %d ntu %d distance=%d",q->qid, ring->next_to_clean, ring->next_to_use, onic_ring_get_occupancy(ring));
+	
 	for (i = 0; i < real_count; ++i) {
 		if ((q->buffer[i].type & ONIC_TX_SKB ) && q->buffer[i].skb) {
 			netdev_err(priv->netdev, "Weird, skb is not NULL\n");
@@ -817,6 +823,7 @@ void onic_clear_rx_queue(struct onic_private *priv, u16 qid)
 	real_count = ring->count - 1;
 	size = QDMA_C2H_ST_DESC_SIZE * real_count + QDMA_WB_STAT_SIZE;
 	size = ALIGN(size, PAGE_SIZE);
+	netdev_info(q->netdev, "Cleaning RTX desc_ring #%d ntc %d ntu %d distance=%d",q->qid, ring->next_to_clean, ring->next_to_use, onic_ring_get_occupancy(ring));
 
 	if (ring->desc)
 		dma_free_coherent(&priv->pdev->dev, size, ring->desc,
@@ -826,6 +833,8 @@ void onic_clear_rx_queue(struct onic_private *priv, u16 qid)
 	real_count = ring->count - 1;
 	size = QDMA_C2H_CMPL_SIZE * real_count + QDMA_C2H_CMPL_STAT_SIZE;
 	size = ALIGN(size, PAGE_SIZE);
+
+	netdev_info(q->netdev, "Cleaning RTX cmpl_ring #%d ntc %d ntu %d distance=%d",q->qid, ring->next_to_clean, ring->next_to_use, onic_ring_get_occupancy(ring));
 
 	if (ring->desc)
 		dma_free_coherent(&priv->pdev->dev, size, ring->desc,
