@@ -150,7 +150,6 @@ static void onic_rx_refill(struct onic_rx_queue *q) {
         netdev_err(q->netdev, "xsk_buff_alloc failed\n");
         break;
       }
-	    onic_ring_increment_head(desc_ring);
       buffers_allocated++;
       q->xdps[desc_ring->next_to_use] = xdp_buff;
       desc.dst_addr = xsk_buff_xdp_get_dma(xdp_buff);
@@ -162,7 +161,6 @@ static void onic_rx_refill(struct onic_rx_queue *q) {
         break;
       }
 
-	    onic_ring_increment_head(desc_ring);
       buffers_allocated++;
       q->buffer[desc_ring->next_to_use].pg = pg;
       q->buffer[desc_ring->next_to_use].offset = XDP_PACKET_HEADROOM;
@@ -171,6 +169,7 @@ static void onic_rx_refill(struct onic_rx_queue *q) {
     }
 
     qdma_pack_c2h_st_desc(desc_ptr, &desc);
+    onic_ring_increment_head(desc_ring);
   }
 
   // desc_ring->next_to_use += ONIC_RX_DESC_STEP;
