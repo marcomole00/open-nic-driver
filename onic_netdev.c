@@ -139,6 +139,7 @@ static void onic_rx_refill(struct onic_rx_queue *q) {
 
   netdev_info(priv->netdev, "%s ntc %d ntu %d", __func__,
               desc_ring->next_to_clean, desc_ring->next_to_use);
+  // the upper bound should be min(ONIX_RX_DESC_STEP, NTU-NTC)?
   for (i = 0; i < ONIC_RX_DESC_STEP; i++)
 
   {
@@ -670,7 +671,6 @@ void onic_clear_tx_queue(struct onic_private *priv, u16 qid)
 	int real_count;
 	int i;
 
-	netdev_info(priv->netdev, "cleaning tx queue %d", qid);
 
 	if (!q)
 		return;
@@ -712,7 +712,6 @@ void onic_clear_tx_queue(struct onic_private *priv, u16 qid)
 	int rv;
 	bool debug = 0;
 
-	netdev_info(priv->netdev, "Init.ing tx queue %d",qid);
 	if (priv->tx_queue[qid]) {
 		if (debug)
 			netdev_info(dev, "Re-initializing TX queue %d", qid);
@@ -749,8 +748,6 @@ void onic_clear_tx_queue(struct onic_private *priv, u16 qid)
 	ring->next_to_clean = 0;
 	ring->color = 0;
 
-	netdev_info(dev, "TX queue %d, ring count %d, ring size %d, real_count %d", 
-		    qid, ring->count, size, real_count);
 
 	if (test_bit(q->qid, priv->af_xdp_zc_qps))
 	{
@@ -803,7 +800,6 @@ void onic_clear_rx_queue(struct onic_private *priv, u16 qid)
 	int ntc = q->desc_ring.next_to_clean;
 	int ntu = q->desc_ring.next_to_use;
 	
-	netdev_info(priv->netdev, "cleaning rx queue %d", qid);
 	if (!q)
 		return;
 
@@ -831,7 +827,6 @@ void onic_clear_rx_queue(struct onic_private *priv, u16 qid)
 				  ring->dma_addr);
 
 	for (i = ntc; i < ntu; ++i) {
-		netdev_info(priv->netdev, "clearing buffer %d out of %d", i, ntu);
 		if (q->page_pool){
 			struct page *pg = q->buffer[i].pg;
 			page_pool_put_full_page(q->page_pool, pg, false);
@@ -916,7 +911,6 @@ err_free_pp:
 	int err;
 	int buffers_allocated = 0;
 	
-	netdev_info(priv->netdev, "Init.ing rx  queue %d",qid);
 	if (priv->rx_queue[qid]) {
 		if (debug)
 			netdev_info(dev, "Re-initializing RX queue %d", qid);
@@ -982,7 +976,6 @@ err_free_pp:
 			goto clear_rx_queue;
 		}
 
-		netdev_info(dev, "free_list_cnt %d, free_heads_cnt %d", q->xsk_pool->free_list_cnt, q->xsk_pool->free_heads_cnt);
 		for (i = 0; i < ONIC_RX_DESC_STEP; ++i) {
 			q->xdps[i] = xsk_buff_alloc(q->xsk_pool);
 			if (!q->xdps[i]) {
@@ -1324,18 +1317,15 @@ static int onic_setup_xdp_prog(struct net_device *dev, struct bpf_prog *prog) {
 	need_reset = (!!prog != !!old_prog);
 
 	if (need_reset && running) {
-		netdev_info(dev, "need reset and running");
 		onic_stop_netdev(dev);
 	} else {
 		
 		int i;
-		netdev_info(dev, "else branch with xchg");
 		for (i = 0; i < priv->num_rx_queues; i++) {
 			xchg(&priv->rx_queue[i]->xdp_prog, priv->xdp_prog);
 		}
 	}
 	if (old_prog){
-		netdev_info(dev, "putting old prog");
 		bpf_prog_put(old_prog);
 	}
 
