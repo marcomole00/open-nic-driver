@@ -807,9 +807,6 @@ void onic_clear_rx_queue(struct onic_private *priv, u16 qid)
 	struct onic_rx_queue *q = priv->rx_queue[qid];
 	struct onic_ring *ring;
 	u32 size, real_count;
-	int i;
-	int ntc = q->desc_ring.next_to_clean;
-	int ntu = q->desc_ring.next_to_use;
 	
 	if (!q)
 		return;
@@ -819,6 +816,20 @@ void onic_clear_rx_queue(struct onic_private *priv, u16 qid)
 	napi_disable(&q->napi);
 	netif_napi_del(&q->napi);
 
+	while (onic_ring_get_occupancy(&q->desc_ring) > 0) {
+		
+		if (q->page_pool){
+			struct page *pg = q->buffer[q->desc_ring.next_to_clean].pg;
+			page_pool_put_full_page(q->page_pool, pg, false);
+		} else if (q->xsk_pool) {
+			struct xdp_buff *xdp_buff = q->xdps[q->desc_ring.next_to_clean];
+			xsk_buff_free(xdp_buff);
+		} else {
+			netdev_err(priv->netdev, "unknown buffer type");
+		}
+		onic_ring_increment_tail(&q->desc_ring);
+	}
+	
 	ring = &q->desc_ring;
 	real_count = ring->count - 1;
 	size = QDMA_C2H_ST_DESC_SIZE * real_count + QDMA_WB_STAT_SIZE;
@@ -840,17 +851,6 @@ void onic_clear_rx_queue(struct onic_private *priv, u16 qid)
 		dma_free_coherent(&priv->pdev->dev, size, ring->desc,
 				  ring->dma_addr);
 
-	for (i = ntc; i < ntu; ++i) {
-		if (q->page_pool){
-			struct page *pg = q->buffer[i].pg;
-			page_pool_put_full_page(q->page_pool, pg, false);
-		} else if (q->xsk_pool) {
-			struct xdp_buff *xdp_buff = q->xdps[i];
-			xsk_buff_free(xdp_buff);
-		} else {
-			netdev_err(priv->netdev, "unknown buffer type");
-		}
-	}
 
 	if(q->page_pool){
 		if (q->buffer) kfree(q->buffer);
@@ -859,10 +859,10 @@ void onic_clear_rx_queue(struct onic_private *priv, u16 qid)
 	}
 	
 	
-	kfree(q);
-	priv->rx_queue[qid] = NULL;
 	if (xdp_rxq_info_is_reg(&q->xdp_rxq))
 		xdp_rxq_info_unreg(&q->xdp_rxq);
+	kfree(q);
+	priv->rx_queue[qid] = NULL;
 	
 }
 
