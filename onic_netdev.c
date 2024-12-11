@@ -217,7 +217,6 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
 	} else {
 		/* ONIC_XDP_TX */
 		struct page *page = virt_to_page(xdpf->data);
-		//TODO  i don't get why adding the size of the xdp_frame struct to the dma_addr. mvneta does this 
 		dma_addr = page_pool_get_dma_addr(page) + sizeof(*xdpf) + xdpf->headroom;
 		dma_sync_single_for_device(&priv->pdev->dev, dma_addr,
 					   xdpf->len, DMA_BIDIRECTIONAL);
@@ -257,6 +256,11 @@ int onic_xdp_xmit_back(struct onic_rx_queue *q, struct xdp_buff *xdp_buff) {
 	struct onic_tx_queue *tx_queue;
 	struct netdev_queue *nq;
 	u32 ret = 0, cpu = smp_processor_id();
+	bool dma_map = false;
+
+	if (q->xsk_pool){
+		dma_map = true;
+	}
 
 	if (unlikely(!xdpf)){
 		q->xdp_rx_stats.xdp_tx_err++;
@@ -272,7 +276,7 @@ int onic_xdp_xmit_back(struct onic_rx_queue *q, struct xdp_buff *xdp_buff) {
 	nq = netdev_get_tx_queue(tx_queue->netdev, tx_queue->qid);
 
 	__netif_tx_lock(nq, cpu);
-	ret = onic_xmit_xdp_ring(priv, tx_queue, xdpf,false);
+	ret = onic_xmit_xdp_ring(priv, tx_queue, xdpf,dma_map);
 	q->xdp_rx_stats.xdp_tx++;
 
 	wmb();
