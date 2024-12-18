@@ -135,9 +135,10 @@ static void onic_rx_refill(struct onic_rx_queue *q) {
   int i = 0;
   int buffers_allocated = 0;
 
-  netdev_info(priv->netdev, "%s @ q#%d  ntc %d ntu %d", __func__,
-              q->qid,desc_ring->next_to_clean, desc_ring->next_to_use);
+  // netdev_info(priv->netdev, "%s @ q#%d  ntc %d ntu %d", __func__,
+              // q->qid,desc_ring->next_to_clean, desc_ring->next_to_use);
   // the upper bound should be min(ONIX_RX_DESC_STEP, NTU-NTC)?
+  //TODO: tweak this this parameter to see if there are differences
   for (i = 0; i < ONIC_RX_DESC_STEP; i++)
 
   {
@@ -172,9 +173,7 @@ static void onic_rx_refill(struct onic_rx_queue *q) {
     onic_ring_increment_head(desc_ring);
   }
 
-  // desc_ring->next_to_use += ONIC_RX_DESC_STEP;
-  // desc_ring->next_to_use %= onic_ring_get_real_count(desc_ring);
-	netdev_info(priv->netdev, "%s: allocated %d buffers, ntc %d ntu %d", __func__, buffers_allocated, desc_ring->next_to_clean, desc_ring->next_to_use);
+	// netdev_info(priv->netdev, "%s: allocated %d buffers, ntc %d ntu %d", __func__, buffers_allocated, desc_ring->next_to_clean, desc_ring->next_to_use);
   onic_set_rx_head(priv->hw.qdma, q->qid, desc_ring->next_to_use);
 }
 
