@@ -149,6 +149,8 @@ struct onic_private {
 	struct onic_q_vector *q_vector[ONIC_MAX_QUEUES];
 	struct onic_tx_queue *tx_queue[ONIC_MAX_QUEUES];
 	struct onic_rx_queue *rx_queue[ONIC_MAX_QUEUES];
+	int rx_ring_size;
+	int tx_ring_rize;
 
 	struct onic_hardware hw;
 };

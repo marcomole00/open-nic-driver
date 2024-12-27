@@ -67,6 +67,17 @@ u16 onic_ring_count(u8 idx)
 	return (idx < QDMA_NUM_DESC_RNGCNT) ? rngcnt_pool[idx] : 0;
 }
 
+u8 onic_idx_from_count(u16 count) {
+
+  int i = 0;
+  for (i = 0; i < QDMA_NUM_DESC_RNGCNT; i++) {
+    if (rngcnt_pool[i] == count)
+      return i;
+  }
+	// if the requested ring size is not available in the HW it defaults to 4096
+  return 0;
+}
+
 /**
  * onic_qdma_init_csr - initialize QDMA config/status registers
  * @qdev: pointer to QDMA device

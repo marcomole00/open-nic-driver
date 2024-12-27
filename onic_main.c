@@ -223,6 +223,8 @@ static int onic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	memset(priv, 0, sizeof(struct onic_private));
 	priv->RS_FEC = RS_FEC_ENABLED;
+	priv->rx_ring_size = 4096;
+	priv->tx_ring_rize = 4096;
 
 	if (PCI_FUNC(pdev->devfn) == 0) {
 		dev_info(&pdev->dev, "device is a master PF");

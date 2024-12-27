@@ -55,6 +55,7 @@ struct onic_private;
  **/
 u16 onic_ring_count(u8 idx);
 
+u8 onic_idx_from_count(u16 count);
 /**
  * onic_init_hardware - initialize NIC hardware
  * @priv: pointer to driver private data

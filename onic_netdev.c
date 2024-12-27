@@ -625,7 +625,7 @@ static void onic_clear_tx_queue(struct onic_private *priv, u16 qid)
 
 static int onic_init_tx_queue(struct onic_private *priv, u16 qid)
 {
-	const u8 rngcnt_idx = 0;
+	u8 rngcnt_idx = 0;
 	struct net_device *dev = priv->netdev;
 	struct onic_tx_queue *q;
 	struct onic_ring *ring;
@@ -640,7 +640,8 @@ static int onic_init_tx_queue(struct onic_private *priv, u16 qid)
 			netdev_info(dev, "Re-initializing TX queue %d", qid);
 		onic_clear_tx_queue(priv, qid);
 	}
-
+	rngcnt_idx = onic_idx_from_count(priv->tx_ring_rize);
+	
 	q = kzalloc(sizeof(struct onic_tx_queue), GFP_KERNEL);
 	if (!q)
 		return -ENOMEM;
@@ -789,10 +790,10 @@ err_free_pp:
 static int onic_init_rx_queue(struct onic_private *priv, u16 qid)
 {
 	// TODO: make these configurable via ethtool
-	const u8 bufsz_idx = 8;
-	const u8 desc_rngcnt_idx = 8;
-	//const u8 cmpl_rngcnt_idx = 15;
-	const u8 cmpl_rngcnt_idx = 8;
+	 u8 bufsz_idx = 8;
+	 u8 desc_rngcnt_idx = 8;
+	// u8 cmpl_rngcnt_idx = 15;
+	 u8 cmpl_rngcnt_idx = 8;
 	struct net_device *dev = priv->netdev;
 	struct onic_rx_queue *q;
 	struct onic_ring *ring;
@@ -807,7 +808,10 @@ static int onic_init_rx_queue(struct onic_private *priv, u16 qid)
 			netdev_info(dev, "Re-initializing RX queue %d", qid);
 		onic_clear_rx_queue(priv, qid);
 	}
-
+	bufsz_idx = onic_idx_from_count(priv->rx_ring_size);
+	desc_rngcnt_idx  = onic_idx_from_count(priv->rx_ring_size);
+	cmpl_rngcnt_idx = onic_idx_from_count(priv->rx_ring_size);
+		
 	q = kzalloc(sizeof(struct onic_rx_queue), GFP_KERNEL);
 	if (!q)
 		return -ENOMEM;

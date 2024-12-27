@@ -21,7 +21,9 @@
 #include <linux/version.h>
 
 #include "onic.h"
+#include "onic_netdev.h"
 #include "onic_register.h"
+#include "onic_hardware.h"
 
 extern const char onic_drv_name[];
 extern const char onic_drv_ver[];
@@ -515,6 +517,44 @@ static int onic_get_rxnfc(struct net_device *dev, struct ethtool_rxnfc *info, u3
 	}
 }
 
+static void onic_get_ringparam(struct net_device * dev,
+				 struct ethtool_ringparam *ering,
+				 struct kernel_ethtool_ringparam *kring,
+				 struct netlink_ext_ack *netlink )
+{
+      struct onic_private *priv = netdev_priv(dev);
+
+      ering->rx_pending = priv->rx_queue[0]->desc_ring.count;
+      ering->rx_mini_max_pending = 0;
+      ering->rx_jumbo_max_pending = 0;
+      ering->tx_pending = priv->tx_queue[0]->ring.count;
+      ering->rx_max_pending = 16384;
+      ering->tx_max_pending = 16384;
+}
+
+static int  onic_set_ringparam(struct net_device * dev,
+				 struct ethtool_ringparam *ering,
+				 struct kernel_ethtool_ringparam *kring,
+				 struct netlink_ext_ack *netlink)
+
+{
+  struct onic_private *priv = netdev_priv(dev);
+  int rv = 0;
+  if (ering->rx_pending > 16384 || ering->tx_pending > 16384)
+    return -EINVAL;
+  
+                          
+  onic_stop_netdev(dev);
+
+  priv->rx_ring_size = ering->rx_pending;
+  priv->tx_ring_rize = ering->tx_pending;
+
+  rv = onic_open_netdev(dev);
+  if (rv != 0) netdev_info(dev, "opening of netdev failed with code %d", rv);
+  return rv;
+}
+
+
 
 static const struct ethtool_ops onic_ethtool_ops = {
     .get_drvinfo         = onic_get_drvinfo,
@@ -532,7 +572,9 @@ static const struct ethtool_ops onic_ethtool_ops = {
     .set_rxfh            = onic_set_rxfh,
 #endif
     .get_rxnfc           = onic_get_rxnfc,
-};
+    .get_ringparam       = onic_get_ringparam,
+    .set_ringparam       = onic_set_ringparam
+    };
 
 void onic_set_ethtool_ops(struct net_device *netdev)
 {
