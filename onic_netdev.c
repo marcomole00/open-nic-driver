@@ -1014,10 +1014,10 @@ int onic_stop_netdev(struct net_device *dev)
 	netif_carrier_off(dev);
 	netif_tx_stop_all_queues(dev);
 
-	for (qid = 0; qid < priv->num_tx_queues; ++qid)
-		onic_clear_tx_queue(priv, qid);
 	for (qid = 0; qid < priv->num_rx_queues; ++qid)
 		onic_clear_rx_queue(priv, qid);
+	for (qid = 0; qid < priv->num_tx_queues; ++qid)
+		onic_clear_tx_queue(priv, qid);
 
 	return 0;
 }
