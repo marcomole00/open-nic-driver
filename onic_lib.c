@@ -123,6 +123,11 @@ static int onic_init_q_vector(struct onic_private *priv, u16 vid)
 
 	dev_info(&pdev->dev, "Setup IRQ vector %d with name %s",
 		 pci_irq_vector(pdev, vid), name);
+	// This is done because for now the driver does not support hw interrupt masking, 
+	// even though it should be support at the qdma level.
+	// In order to avoid race conditions when removing the driver during high network load
+	// the irq lines are enabled on initialization of the rx queues and disabled in the onic_clean_rx_queue
+	disable_irq(pci_irq_vector(vec->priv->pdev, vec->vid));
 	priv->q_vector[vid] = vec;
 
 	return 0;

@@ -526,6 +526,13 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 				netdev_info(q->netdev,
 					    "watchdog work %u, budget %u", work,
 					    budget);
+			// TODO: TRY REMOVING napi_complete and schedule from this path AND CHECK IF IT STILL WORKS.
+			// The following is a comment from the __napi_poll() function in net/core/dev.c 
+		  // Drivers must not modify the NAPI state if they
+		  // consume the entire weight.  In such cases this code
+		  // still "owns" the NAPI instance and therefore can
+		  // move the instance around on the list at-will.
+
 			napi_complete(napi);
 			napi_schedule(napi);
 			goto out_of_budget;
@@ -703,12 +710,13 @@ static void onic_clear_rx_queue(struct onic_private *priv, u16 qid)
 {
 	struct onic_rx_queue *q = priv->rx_queue[qid];
 	struct onic_ring *ring;
+	struct onic_q_vector *vec = priv->q_vector[qid];
 	u32 size, real_count;
 	int i;
 
 	if (!q)
 		return;
-
+	disable_irq(pci_irq_vector(vec->priv->pdev, vec->vid));
 	onic_qdma_clear_rx_queue(priv->hw.qdma, qid);
 
 	napi_disable(&q->napi);
@@ -789,14 +797,14 @@ err_free_pp:
 
 static int onic_init_rx_queue(struct onic_private *priv, u16 qid)
 {
-	// TODO: make these configurable via ethtool
-	 u8 bufsz_idx = 8;
-	 u8 desc_rngcnt_idx = 8;
+	 u8 bufsz_idx = 0;
+	 u8 desc_rngcnt_idx = 0;
 	// u8 cmpl_rngcnt_idx = 15;
-	 u8 cmpl_rngcnt_idx = 8;
+	 u8 cmpl_rngcnt_idx = 0;
 	struct net_device *dev = priv->netdev;
 	struct onic_rx_queue *q;
 	struct onic_ring *ring;
+	struct onic_q_vector *vec = priv->q_vector[qid];
 	struct onic_qdma_c2h_param param;
 	u16 vid;
 	u32 size, real_count;
@@ -844,6 +852,8 @@ static int onic_init_rx_queue(struct onic_private *priv, u16 qid)
 	ring->next_to_clean = 0;
 	ring->color = 0;
 
+	netdev_info(dev, "RX queue %d, ring count %d, ring size %d, real_count %d", 
+		    qid, ring->count, size, real_count);
 	/* initialize RX buffers */
 	q->buffer =
 		kcalloc(real_count, sizeof(struct onic_rx_buffer), GFP_KERNEL);
@@ -931,6 +941,7 @@ static int onic_init_rx_queue(struct onic_private *priv, u16 qid)
 	onic_set_rx_head(priv->hw.qdma, qid, q->desc_ring.next_to_use);
 	onic_set_completion_tail(priv->hw.qdma, qid, 0, 1);
 
+	enable_irq(pci_irq_vector(vec->priv->pdev, vec->vid));
 	priv->rx_queue[qid] = q;
 	return 0;
 
