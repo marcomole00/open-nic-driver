@@ -20,6 +20,7 @@
 #include <linux/ethtool.h>
 #include <linux/version.h>
 
+#include "net/page_pool/helpers.h"
 #include "onic.h"
 #include "onic_netdev.h"
 #include "onic_register.h"
@@ -323,7 +324,7 @@ static void onic_get_ethtool_stats(struct net_device *netdev,
     int i,j;
     u16 func_id;
     u32 off;
-
+    struct page_pool_stats pp_stats = {};
     struct {
             u64 xdp_redirect;
             u64 xdp_pass;
@@ -392,6 +393,13 @@ static void onic_get_ethtool_stats(struct net_device *netdev,
         }
       }
     }
+  
+    for (j = 0; j< priv->num_rx_queues; j++){
+      if(priv->rx_queue[j]->page_pool){
+        page_pool_get_stats(priv->rx_queue[j]->page_pool, &pp_stats);
+      }
+    }
+    page_pool_ethtool_stats_get(&data[i], &pp_stats);
 
     return;
 }
@@ -407,11 +415,12 @@ static void onic_get_strings(struct net_device *netdev, u32 stringset,
             ETH_GSTRING_LEN);
         p += ETH_GSTRING_LEN;
     }
+    page_pool_ethtool_stats_get_strings(p);
 }
 
 static int onic_get_sset_count(struct net_device *netdev, int sset)
 {
-    return ONIC_STATS_LEN;
+    return ONIC_STATS_LEN + page_pool_ethtool_stats_get_count();
 }
 
 static u32 onic_get_rxfh_indir_size(struct net_device *dev)
