@@ -758,14 +758,15 @@ static void onic_clear_rx_queue(struct onic_private *priv, u16 qid)
 static int onic_create_page_pool(struct onic_private *priv, struct onic_rx_queue *q, int size) {
 	struct bpf_prog *xdp_prog = READ_ONCE(priv->xdp_prog);
 	struct page_pool_params pp_params = {
-		.order = 0,
-		.flags = PP_FLAG_DMA_MAP | PP_FLAG_DMA_SYNC_DEV,
+		.order     = 0,
+		.flags     = PP_FLAG_DMA_MAP | PP_FLAG_DMA_SYNC_DEV,
 		.pool_size = size,
-		.nid = dev_to_node(&priv->pdev->dev),
-		.dev = &priv->pdev->dev,
-		.dma_dir = xdp_prog ? DMA_BIDIRECTIONAL : DMA_FROM_DEVICE,
-		.offset = XDP_PACKET_HEADROOM,
-		.max_len = priv->netdev->mtu + ETH_HLEN,
+		.nid       = dev_to_node(&priv->pdev->dev),
+		.dev       = &priv->pdev->dev,
+		.dma_dir   = xdp_prog ? DMA_BIDIRECTIONAL : DMA_FROM_DEVICE,
+		.offset    = XDP_PACKET_HEADROOM,
+		.max_len   = priv->netdev->mtu + ETH_HLEN,
+		.netdev    = priv->netdev,
 	};
 	int err;
 
