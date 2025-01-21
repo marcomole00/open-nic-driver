@@ -533,8 +533,8 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 		  // still "owns" the NAPI instance and therefore can
 		  // move the instance around on the list at-will.
 
-			napi_complete(napi);
-			napi_schedule(napi);
+			// napi_complete(napi);
+			// napi_schedule(napi);
 			goto out_of_budget;
 		}
 
