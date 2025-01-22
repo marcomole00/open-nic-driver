@@ -115,7 +115,7 @@ static void onic_tx_clean(struct onic_tx_queue *q)
 	clear_bit(0, q->state);
 }
 
-static bool onic_rx_high_watermark(struct onic_rx_queue *q)
+/* static bool onic_rx_high_watermark(struct onic_rx_queue *q)
 {
 	struct onic_ring *ring = &q->desc_ring;
 	int unused;
@@ -125,9 +125,9 @@ static bool onic_rx_high_watermark(struct onic_rx_queue *q)
 		unused += onic_ring_get_real_count(ring);
 
 	return (unused < (ONIC_RX_DESC_STEP / 2));
-}
+} */
 
-static void onic_rx_refill(struct onic_rx_queue *q)
+/* static void onic_rx_refill(struct onic_rx_queue *q)
 {
 	struct onic_private *priv = netdev_priv(q->netdev);
 	struct onic_ring *ring = &q->desc_ring;
@@ -137,7 +137,7 @@ static void onic_rx_refill(struct onic_rx_queue *q)
 
 	onic_set_rx_head(priv->hw.qdma, q->qid, ring->next_to_use);
 
-}
+} */
 
 static void onic_rx_page_refill(struct onic_rx_queue *q)
 {
@@ -486,12 +486,12 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 			netdev_dbg(q->netdev, "desc_ring full");
 		}
 
-		if (onic_rx_high_watermark(q)) {
+		/* if (onic_rx_high_watermark(q)) {
 			netdev_dbg(q->netdev, "High watermark: h = %d, t = %d",
 				   desc_ring->next_to_use,
 				   desc_ring->next_to_clean);
 			onic_rx_refill(q);
-		}
+		} */
 
 		onic_ring_increment_tail(cmpl_ring);
 
@@ -583,15 +583,23 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 	}
 
 out_of_budget:
-	if (debug)
-		netdev_info(q->netdev, "rx_poll is done");
-	if (debug)
-		netdev_info(
-			q->netdev,
-			"rx_poll returning work %u, rx_packets %lld, rx_bytes %lld",
-			work, pcpu_stats_pointer->rx_packets,
-			pcpu_stats_pointer->rx_bytes);
-	return work;
+  if (work > 0) {
+    desc_ring->next_to_use =
+        (desc_ring->next_to_clean - 1) % onic_ring_get_real_count(desc_ring);
+    onic_set_completion_tail(priv->hw.qdma, qid, cmpl_ring->next_to_clean, 0);
+    onic_set_rx_head(priv->hw.qdma, q->qid, desc_ring->next_to_use);
+  }
+  netdev_info(q->netdev,
+              "Returning from napi, work %u, ntc %d, ntu %d, cidx %d, pidx %d",
+              work, desc_ring->next_to_clean, desc_ring->next_to_use,
+              cmpl_stat.cidx, cmpl_stat.pidx);
+  if (debug)
+    netdev_info(q->netdev, "rx_poll is done");
+  if (debug)
+    netdev_info(
+        q->netdev, "rx_poll returning work %u, rx_packets %lld, rx_bytes %lld",
+        work, pcpu_stats_pointer->rx_packets, pcpu_stats_pointer->rx_bytes);
+  return work;
 }
 
 static void onic_clear_tx_queue(struct onic_private *priv, u16 qid)
@@ -817,7 +825,6 @@ static int onic_init_rx_queue(struct onic_private *priv, u16 qid)
 			netdev_info(dev, "Re-initializing RX queue %d", qid);
 		onic_clear_rx_queue(priv, qid);
 	}
-	bufsz_idx = onic_idx_from_count(priv->rx_ring_size);
 	desc_rngcnt_idx  = onic_idx_from_count(priv->rx_ring_size);
 	cmpl_rngcnt_idx = onic_idx_from_count(priv->rx_ring_size);
 		
@@ -938,7 +945,7 @@ static int onic_init_rx_queue(struct onic_private *priv, u16 qid)
 		goto clear_rx_queue;
 
 	/* fill RX descriptor ring with a few descriptors */
-	q->desc_ring.next_to_use = ONIC_RX_DESC_STEP;
+	q->desc_ring.next_to_use = onic_ring_get_real_count(&q->desc_ring);
 	onic_set_rx_head(priv->hw.qdma, qid, q->desc_ring.next_to_use);
 	onic_set_completion_tail(priv->hw.qdma, qid, 0, 1);
 
