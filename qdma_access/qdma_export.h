@@ -103,12 +103,13 @@ struct qdma_c2h_cmpl {
 #define QDMA_C2H_CMPL_STAT_DW_CIDX_MASK         GENMASK_ULL(31, 16)
 #define QDMA_C2H_CMPL_STAT_DW_COLOR_MASK        GENMASK_ULL(32, 32)
 #define QDMA_C2H_CMPL_STAT_DW_INTR_STATE_MASK   GENMASK_ULL(34, 33)
-
+#define QDMA_C2H_CMPL_STAT_DW_ERR_MASK          GENMASK_ULL(36, 35)
 struct qdma_c2h_cmpl_stat {
 	u16 pidx;
 	u16 cidx;
 	u8 color;
 	u8 intr_state;
+	u8 error;
 };
 
 /**

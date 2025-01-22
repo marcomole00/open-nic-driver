@@ -590,9 +590,9 @@ out_of_budget:
     onic_set_rx_head(priv->hw.qdma, q->qid, desc_ring->next_to_use);
   }
   netdev_info(q->netdev,
-              "Returning from napi, work %u, ntc %d, ntu %d, cidx %d, pidx %d",
+              "Returning from napi, work %u, ntc %d, ntu %d, cidx %d, pidx %d, error %d",
               work, desc_ring->next_to_clean, desc_ring->next_to_use,
-              cmpl_stat.cidx, cmpl_stat.pidx);
+              cmpl_stat.cidx, cmpl_stat.pidx, cmpl_stat.error);
   if (debug)
     netdev_info(q->netdev, "rx_poll is done");
   if (debug)
@@ -945,7 +945,7 @@ static int onic_init_rx_queue(struct onic_private *priv, u16 qid)
 		goto clear_rx_queue;
 
 	/* fill RX descriptor ring with a few descriptors */
-	q->desc_ring.next_to_use = onic_ring_get_real_count(&q->desc_ring);
+	q->desc_ring.next_to_use = onic_ring_get_real_count(&q->desc_ring) - 1;
 	onic_set_rx_head(priv->hw.qdma, qid, q->desc_ring.next_to_use);
 	onic_set_completion_tail(priv->hw.qdma, qid, 0, 1);
 

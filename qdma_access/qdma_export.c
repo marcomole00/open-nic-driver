@@ -87,4 +87,5 @@ void qdma_unpack_c2h_cmpl_stat(struct qdma_c2h_cmpl_stat *stat, u8 *data)
 	stat->color = BITFIELD_GET(QDMA_C2H_CMPL_STAT_DW_COLOR_MASK, *dw);
 	stat->intr_state =
 		BITFIELD_GET(QDMA_C2H_CMPL_STAT_DW_INTR_STATE_MASK, *dw);
+	stat->error = BITFIELD_GET(QDMA_C2H_CMPL_STAT_DW_ERR_MASK,*dw );
 }
