@@ -559,8 +559,8 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 				cmpl_stat.pidx, work, budget,
 				napi_cmpl_rval ? "true" : "false");
 		napi_cmpl_rval = napi_complete_done(napi, work);
-		onic_set_completion_tail(priv->hw.qdma, qid,
-					 cmpl_ring->next_to_clean, 1);
+		// onic_set_completion_tail(priv->hw.qdma, qid,
+					 // cmpl_ring->next_to_clean, 1);
 		if (debug)
 			netdev_info(q->netdev, "onic_set_completion_tail ");
 	} else if (cmpl_ring->next_to_clean == 0) {
@@ -576,8 +576,8 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 				    work, budget,
 				    napi_cmpl_rval ? "true" : "false");
 		napi_cmpl_rval = napi_complete_done(napi, work);
-		onic_set_completion_tail(priv->hw.qdma, qid,
-					 cmpl_ring->next_to_clean, 1);
+		// onic_set_completion_tail(priv->hw.qdma, qid,
+					 // cmpl_ring->next_to_clean, 1);
 		if (debug)
 			netdev_info(q->netdev, "onic_set_completion_tail ");
 	}
