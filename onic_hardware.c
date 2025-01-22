@@ -480,7 +480,7 @@ int onic_qdma_init_rx_queue(unsigned long qdma, u16 qid,
 	cmpl_ctxt.baddr = param->cmpl_dma_addr;
 	cmpl_ctxt.desc_sz = param->cmpl_desc_sz;
 	cmpl_ctxt.valid = 1;
-	cmpl_ctxt.full_upd = 0;
+	cmpl_ctxt.full_upd = 1;
 	cmpl_ctxt.ovf_chk_dis = 0;
 	cmpl_ctxt.vec = param->vid;
 	cmpl_ctxt.intr_aggr = 0;
