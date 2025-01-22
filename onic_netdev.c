@@ -584,13 +584,16 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 
 out_of_budget:
   if (work > 0) {
-    desc_ring->next_to_use =
-        (desc_ring->next_to_clean - 1) % onic_ring_get_real_count(desc_ring);
+    if (desc_ring->next_to_clean == 0)
+      desc_ring->next_to_use = onic_ring_get_real_count(desc_ring) - 1;
+    else
+      desc_ring->next_to_use =
+          (desc_ring->next_to_clean - 1) % onic_ring_get_real_count(desc_ring);
     onic_set_completion_tail(priv->hw.qdma, qid, cmpl_ring->next_to_clean, 0);
     onic_set_rx_head(priv->hw.qdma, q->qid, desc_ring->next_to_use);
   }
   netdev_info(q->netdev,
-              "Returning from napi, work %u, ntc %d, ntu %d, cidx %d, pidx %d, error %d",
+              "Returning from napi, work %5u, ntc %5u, ntu %5u, cidx %5u, pidx %5u, error %5u",
               work, desc_ring->next_to_clean, desc_ring->next_to_use,
               cmpl_stat.cidx, cmpl_stat.pidx, cmpl_stat.error);
   if (debug)
