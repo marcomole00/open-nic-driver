@@ -20,6 +20,7 @@
 #include <linux/ethtool.h>
 #include <linux/version.h>
 
+#include "linux/ethtool.h"
 #include "net/page_pool/helpers.h"
 #include "onic.h"
 #include "onic_netdev.h"
@@ -564,7 +565,14 @@ static int  onic_set_ringparam(struct net_device * dev,
 }
 
 
-
+static void onic_get_channels(struct net_device *dev, struct ethtool_channels *info)
+{
+  struct onic_private *priv = netdev_priv(dev);
+  if(info->cmd == ETHTOOL_GCHANNELS){
+    info->rx_count = priv->num_rx_queues;
+    info->tx_count = priv->num_tx_queues;
+  }
+}
 static const struct ethtool_ops onic_ethtool_ops = {
     .get_drvinfo         = onic_get_drvinfo,
     .get_link            = onic_get_link,
@@ -576,6 +584,7 @@ static const struct ethtool_ops onic_ethtool_ops = {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
     .set_rxfh            = onic_set_rxfh_new,
     .get_rxfh            = onic_get_rxfh_new,
+    .get_channels        = onic_get_channels,
 #else
     .get_rxfh            = onic_get_rxfh,
     .set_rxfh            = onic_set_rxfh,
