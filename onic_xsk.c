@@ -48,7 +48,7 @@ int onic_xsk_xmit(struct onic_private *priv, struct onic_tx_queue *q, int budget
 	}
 	if (trasmitted)
 		xsk_tx_release(q->xsk_pool);
-	wmb();
+	// wmb();
 	onic_set_tx_head(priv->hw.qdma, q->qid, ring->next_to_use);
 	return trasmitted;
 }
@@ -154,6 +154,8 @@ int onic_xsk_wakeup(struct net_device *dev, u32 qid, u32 flags) {
     // will not run on two different cores at the same time.
     // napi_schedule(&rx_queue->napi);
     onic_set_completion_tail(priv->hw.qdma, qid, rx_queue->cmpl_ring->next_to_clean,1)
+    // it's better because it generate an interrupt, triggered by the cidx update
+		// if the ring is empty it still does not generate an interrupt
   }
 
   return 0;

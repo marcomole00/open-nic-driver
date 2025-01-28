@@ -111,8 +111,25 @@ void onic_tx_clean(struct onic_tx_queue *q) {
 
     onic_ring_increment_tail(ring);
   }
-	 if (xsk_trasmitted) xsk_tx_completed(q->xsk_pool, xsk_trasmitted);
+  if (xsk_trasmitted)
+    xsk_tx_completed(q->xsk_pool, xsk_trasmitted);
+
   clear_bit(0, q->state);
+}
+
+
+static void onic_update_tx_need_wakeup(struct onic_tx_queue *q){
+
+  struct qdma_wb_stat wb;
+
+  qdma_unpack_wb_stat(&wb, q->ring->wb);
+  if (q->xsk_pool && xsk_uses_need_wakeup(q->xsk_pool)) {
+    if (wb.cidx == wb.pidx)
+      xsk_set_tx_need_wakeup(q->xsk_pool);
+    else
+      xsk_clear_tx_need_wakeup(q->xsk_pool);
+  }
+	
 }
 
 static bool onic_rx_high_watermark(struct onic_rx_queue *q)
@@ -134,6 +151,7 @@ static void onic_rx_refill(struct onic_rx_queue *q) {
   struct qdma_c2h_st_desc desc;
   int i = 0;
   int buffers_allocated = 0;
+  bool wake_up = false;
 
   // netdev_info(priv->netdev, "%s @ q#%d  ntc %d ntu %d", __func__,
               // q->qid,desc_ring->next_to_clean, desc_ring->next_to_use);
@@ -149,6 +167,7 @@ static void onic_rx_refill(struct onic_rx_queue *q) {
       xdp_buff = xsk_buff_alloc(q->xsk_pool);
       if (!xdp_buff) {
         netdev_err(q->netdev, "xsk_buff_alloc failed\n");
+        wake_up = true;
         break;
       }
       buffers_allocated++;
@@ -175,7 +194,15 @@ static void onic_rx_refill(struct onic_rx_queue *q) {
 
 	// netdev_info(priv->netdev, "%s: allocated %d buffers, ntc %d ntu %d", __func__, buffers_allocated, desc_ring->next_to_clean, desc_ring->next_to_use);
   onic_set_rx_head(priv->hw.qdma, q->qid, desc_ring->next_to_use);
-}
+  if (!xsk_uses_need_wakeup(q->xsk_pool))
+    return wake_up; // signal to the outer function to not call napi_complete_done,
+                 // because we have to reschedule
+  if (wake_up)
+    xsk_set_rx_need_wakeup(q->xsk_pool);
+  else
+    xsk_clear_rx_need_wakeup(q->xsk_pool);
+  return false;
+  }
 
 static struct onic_tx_queue *onic_xdp_tx_queue_mapping(struct onic_private *priv)
 {
@@ -392,12 +419,23 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 
 	if (debug) netdev_info(q->netdev, "%s qid %d", __func__, qid);
 	for (i = 0; i < priv->num_tx_queues; i++) {
+		onic_tx_clean(priv->tx_queue[i]);
 		if (qid == i && test_bit(qid,priv->af_xdp_zc_qps) && q->xsk_pool) 
 		{
+			onic_update_tx_need_wakeup(priv->tx_queue[qid]);
 			budget -=	onic_xsk_xmit(priv,priv->tx_queue[qid],budget);
+			onic_update_tx_need_wakeup(priv->tx_queue[qid]);
+			// double update to prevent the following race condition
+
+	//		  Driver 																		  ||  Application  			
+	//		  Transmit	 packets 
+	//																								  ||  Put new packets to transmit 
+	//											  												  ||  Query need_wakeup – it’s false 
+	//		  Hardware queue is empty, set need_wakeup 
+	//		  Waits for the wakeup syscall						    ||  Doesn’t call the wakeup syscall
 		} 
-		onic_tx_clean(priv->tx_queue[i]);
 	}
+
 	cmpl_ptr =
 		cmpl_ring->desc + QDMA_C2H_CMPL_SIZE * cmpl_ring->next_to_clean;
 	cmpl_stat_ptr =
