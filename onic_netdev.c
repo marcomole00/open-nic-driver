@@ -14,6 +14,7 @@
  * The full GNU General Public License is included in this distribution in
  * the file called "COPYING".
  */
+#include "linux/compiler.h"
 #include <linux/if_link.h>
 #include <linux/pci_regs.h>
 #include <linux/version.h>
@@ -23,6 +24,7 @@
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/bpf_trace.h>
+#include <linux/prefetch.h>
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
 #include <net/page_pool/helpers.h>
@@ -138,23 +140,35 @@ static void onic_tx_clean(struct onic_tx_queue *q)
 	onic_set_rx_head(priv->hw.qdma, q->qid, ring->next_to_use);
 
 } */
-
-static void onic_rx_page_refill(struct onic_rx_queue *q)
+static void onic_rx_page_refill_head(struct onic_rx_queue *q, struct page *pg)
 {
 	struct onic_ring *desc_ring = &q->desc_ring;
 	struct qdma_c2h_st_desc desc;
-	struct page *pg;
-	u8 *desc_ptr = desc_ring->desc + QDMA_C2H_ST_DESC_SIZE * desc_ring->next_to_clean;
-
-	pg = page_pool_dev_alloc_pages(q->page_pool);
-
-	q->buffer[desc_ring->next_to_clean].pg = pg;
-	q->buffer[desc_ring->next_to_clean].offset = XDP_PACKET_HEADROOM;
-
-
+	u8 *desc_ptr = desc_ring->desc + QDMA_C2H_ST_DESC_SIZE * desc_ring->next_to_use;
+	q->buffer[desc_ring->next_to_use].pg = pg;
+	q->buffer[desc_ring->next_to_use].offset = XDP_PACKET_HEADROOM;
 	desc.dst_addr = page_pool_get_dma_addr(pg) + XDP_PACKET_HEADROOM;
 	qdma_pack_c2h_st_desc(desc_ptr, &desc);
 }
+
+// static int onic_rx_page_refill(struct onic_rx_queue *q)
+// {
+// 	struct onic_ring *desc_ring = &q->desc_ring;
+// 	struct qdma_c2h_st_desc desc;
+// 	struct page *pg;
+// 	u8 *desc_ptr = desc_ring->desc + QDMA_C2H_ST_DESC_SIZE * desc_ring->next_to_clean;
+
+// 	pg = page_pool_dev_alloc_pages(q->page_pool);
+
+// 	if (unlikely(!pg)) return -ENOMEM;
+// 	q->buffer[desc_ring->next_to_clean].pg = pg;
+// 	q->buffer[desc_ring->next_to_clean].offset = XDP_PACKET_HEADROOM;
+
+
+// 	desc.dst_addr = page_pool_get_dma_addr(pg) + XDP_PACKET_HEADROOM;
+// 	qdma_pack_c2h_st_desc(desc_ptr, &desc);
+// 	return 0;
+// }
 
 static struct onic_tx_queue *onic_xdp_tx_queue_mapping(struct onic_private *priv)
 {
@@ -419,16 +433,21 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 		struct sk_buff *skb;
 		
 		int len = cmpl.pkt_len;
+	  if (buf->pg == NULL) {
+	    netdev_err(q->netdev,
+	               "buffer page is null, system gonna fail miserably");
+	  }
+    xdp_init_buff(&xdp, PAGE_SIZE, &q->xdp_rxq);
 
-		xdp_init_buff(&xdp, PAGE_SIZE, &q->xdp_rxq);
-
-		dma_sync_single_for_cpu(&priv->pdev->dev,
-					page_pool_get_dma_addr(buf->pg) +
-						buf->offset,
-						len, DMA_FROM_DEVICE);
+    dma_sync_single_for_cpu(&priv->pdev->dev,
+		page_pool_get_dma_addr(buf->pg) +
+							buf->offset,
+							len, DMA_FROM_DEVICE);
    
-		xdp_prepare_buff(&xdp, page_address(buf->pg), buf->offset, len, false);
+		xdp_prepare_buff(&xdp, page_address(buf->pg), buf->offset, len, true);
 		
+		net_prefetch(xdp.data);
+
 		res = onic_run_xdp(q, &xdp,priv);
 		if (IS_ERR(res)) {
 			unsigned int xdp_res = -PTR_ERR(res);
@@ -468,7 +487,8 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 
 
 		// here the page where packet data was written has either been recycled or marked for recycling
-		onic_rx_page_refill(q);
+		q->buffer[desc_ring->next_to_use].pg = NULL;
+		// onic_rx_page_refill(q);
 
 		pcpu_stats_pointer->rx_packets++;
 		pcpu_stats_pointer->rx_bytes += len;
@@ -519,6 +539,8 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 		cmpl_ptr = cmpl_ring->desc +
 			   (QDMA_C2H_CMPL_SIZE * cmpl_ring->next_to_clean);
 
+		prefetch(&q->buffer[desc_ring->next_to_clean]);
+		
 		if ((++work) >= budget) {
 			if (xdp_xmit & ONIC_XDP_REDIR)
 					xdp_do_flush();
@@ -579,19 +601,39 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 	}
 
 out_of_budget:
-  if (work > 0) {
-    if (desc_ring->next_to_clean == 0)
-      desc_ring->next_to_use = onic_ring_get_real_count(desc_ring) - 1;
-    else
-      desc_ring->next_to_use =
-          (desc_ring->next_to_clean - 1) % onic_ring_get_real_count(desc_ring);
+  for (int i = 0; i < work; i++) {
+    struct page *pg = page_pool_dev_alloc_pages(q->page_pool);
+    if (likely(!pg)) {
+      // increment head
+      onic_ring_increment_head(desc_ring);
+      // refill next to use
+      onic_rx_page_refill_head(q,pg);
+    } else break;
   }
-    onic_set_completion_tail(priv->hw.qdma, qid, cmpl_ring->next_to_clean, napi_cmpl_rval );
-    onic_set_rx_head(priv->hw.qdma, q->qid, desc_ring->next_to_use);
-  netdev_info(q->netdev,
-              "Returning from napi, work %5u, ntc %5u, ntu %5u, cidx %5u, pidx %5u, error %5u",
-              work, desc_ring->next_to_clean, desc_ring->next_to_use,
-              cmpl_stat.cidx, cmpl_stat.pidx, cmpl_stat.error);
+  // sanity check that ntu % ring_size == ntc - 1 % ring_size
+  // TODO REMOVE THIS AFTER I'M SURE IT WORKS
+  if (work > 0) {
+    if (desc_ring->next_to_clean == 0) {
+      if (desc_ring->next_to_use != onic_ring_get_real_count(desc_ring) - 1) {
+        netdev_err(q->netdev, "ntu is not ntc -1 %d %d", desc_ring->next_to_use,
+                   desc_ring->next_to_clean);
+      }
+    } else {
+      if (desc_ring->next_to_use != (desc_ring->next_to_clean - 1) %
+                                        onic_ring_get_real_count(desc_ring)) {
+        netdev_err(q->netdev, "ntu is not ntc -1 %d %d", desc_ring->next_to_use,
+                   desc_ring->next_to_clean);
+      }
+    }
+  }
+  onic_set_completion_tail(priv->hw.qdma, qid, cmpl_ring->next_to_clean,
+                           napi_cmpl_rval);
+  onic_set_rx_head(priv->hw.qdma, q->qid, desc_ring->next_to_use);
+  // netdev_info(q->netdev,
+  //             "Returning from napi, work %5u, ntc %5u, ntu %5u, cidx %5u,
+  //             pidx %5u, error %5u", work, desc_ring->next_to_clean,
+  //             desc_ring->next_to_use, cmpl_stat.cidx, cmpl_stat.pidx,
+  //             cmpl_stat.error);
   if (debug)
     netdev_info(q->netdev, "rx_poll is done");
   if (debug)
@@ -1242,7 +1284,7 @@ int onic_xdp_xmit(struct net_device *dev, int n, struct xdp_frame **frames, u32 
 		err = 0;
 		err = onic_xmit_xdp_ring(priv, tx_queue, frame, true);
 		if (err != ONIC_XDP_TX) {
-			xdp_return_frame_rx_napi(frame);
+			xdp_return_frame(frame);
 			netdev_err(dev, "Failed to transmit frame");
 			tx_queue->xdp_tx_stats.xdp_xmit_err++;
 			drops++;
