@@ -15,6 +15,7 @@
  * the file called "COPYING".
  */
 #include "linux/compiler.h"
+#include "linux/smp.h"
 #include <linux/if_link.h>
 #include <linux/pci_regs.h>
 #include <linux/version.h>
@@ -64,7 +65,7 @@ inline static void onic_ring_increment_tail(struct onic_ring *ring)
 	ring->next_to_clean = (ring->next_to_clean + 1) % real_count;
 }
 
-static void onic_tx_clean(struct onic_tx_queue *q)
+static void onic_tx_clean(struct onic_tx_queue *q, bool napi_direct)
 {
 	struct onic_private *priv = netdev_priv(q->netdev);
 	struct onic_ring *ring = &q->ring;
@@ -98,7 +99,8 @@ static void onic_tx_clean(struct onic_tx_queue *q)
 			buf->skb = NULL;
 		}  else if (buf->type == ONIC_TX_XDPF) {
 			// The packet originated from a XDP_TX -> It comes from a page pool, no need to dma unmap
-			xdp_return_frame(buf->xdpf);
+			if (napi_direct) xdp_return_frame_rx_napi(buf->xdpf);
+			else xdp_return_frame(buf->xdpf);
 			buf->xdpf = NULL;
 		} else if (buf->type == ONIC_TX_XDPF_XMIT) {
 			// The packet originated from the XDP program of another driver. 
@@ -191,8 +193,9 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
 	enum onic_tx_buf_type type;
 
 	ring = &tx_queue->ring;
+	prefetch(ring->wb);
 	
-	onic_tx_clean(tx_queue);
+	// onic_tx_clean(tx_queue, !dma_map);// if dma_map is false we are in xmit a XDP_TX, meaning we're in napi context
 
 	if (onic_ring_full(ring)) {
 		if (debug)
@@ -262,10 +265,6 @@ static int onic_xdp_xmit_back(struct onic_rx_queue *q, struct xdp_buff *xdp_buff
 	__netif_tx_lock(nq, cpu);
 	ret = onic_xmit_xdp_ring(priv, tx_queue, xdpf,false);
 	q->xdp_rx_stats.xdp_tx++;
-
-	wmb();
-	onic_set_tx_head(priv->hw.qdma, tx_queue->qid, tx_queue->ring.next_to_use);
-
 	__netif_tx_unlock(nq);
 
 	return ret;
@@ -281,7 +280,7 @@ static void *onic_run_xdp(struct onic_rx_queue *rx_queue, struct xdp_buff *xdp_b
 	if (!xdp_prog){
 		goto out;
 	}
-
+	prefetchw(xdp_buff->data_hard_start);
 	act = bpf_prog_run_xdp(xdp_prog, xdp_buff);
 	
 	switch (act){
@@ -377,9 +376,10 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 	struct rtnl_link_stats64 *pcpu_stats_pointer;
 	pcpu_stats_pointer = this_cpu_ptr(priv->netdev_stats);
 
-	for (i = 0; i < priv->num_tx_queues; i++)
-		onic_tx_clean(priv->tx_queue[i]);
-
+	for (i = 0; i < priv->num_tx_queues; i++){
+		prefetch((u64 *)priv->tx_queue[i]->ring.wb);
+		onic_tx_clean(priv->tx_queue[i], i==q->qid? true : false );
+	}
 	cmpl_ptr =
 		cmpl_ring->desc + QDMA_C2H_CMPL_SIZE * cmpl_ring->next_to_clean;
 	cmpl_stat_ptr =
@@ -433,10 +433,6 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 		struct sk_buff *skb;
 		
 		int len = cmpl.pkt_len;
-	  if (buf->pg == NULL) {
-	    netdev_err(q->netdev,
-	               "buffer page is null, system gonna fail miserably");
-	  }
     xdp_init_buff(&xdp, PAGE_SIZE, &q->xdp_rxq);
 
     dma_sync_single_for_cpu(&priv->pdev->dev,
@@ -487,7 +483,7 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 
 
 		// here the page where packet data was written has either been recycled or marked for recycling
-		q->buffer[desc_ring->next_to_use].pg = NULL;
+		q->buffer[desc_ring->next_to_clean].pg = NULL;
 		// onic_rx_page_refill(q);
 
 		pcpu_stats_pointer->rx_packets++;
@@ -544,6 +540,12 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 		if ((++work) >= budget) {
 			if (xdp_xmit & ONIC_XDP_REDIR)
 					xdp_do_flush();
+			if (xdp_xmit & ONIC_XDP_TX) {
+			  struct onic_tx_queue *tx_queue = priv->tx_queue[q->qid];
+				__netif_tx_lock(netdev_get_tx_queue(q->netdev, q->qid),smp_processor_id());
+			  onic_set_tx_head(priv->hw.qdma, tx_queue->qid, tx_queue->ring.next_to_use);
+				__netif_tx_unlock(netdev_get_tx_queue(q->netdev, q->qid));
+		}
 			if (debug)
 				netdev_info(q->netdev,
 					    "watchdog work %u, budget %u", work,
@@ -572,6 +574,15 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 
 	if (xdp_xmit & ONIC_XDP_REDIR)
 		xdp_do_flush();
+
+
+	if (xdp_xmit & ONIC_XDP_TX) {
+	  struct onic_tx_queue *tx_queue = priv->tx_queue[q->qid];
+		__netif_tx_lock(netdev_get_tx_queue(q->netdev, q->qid),smp_processor_id());
+		wmb();
+	  onic_set_tx_head(priv->hw.qdma, tx_queue->qid, tx_queue->ring.next_to_use);
+		__netif_tx_unlock(netdev_get_tx_queue(q->netdev, q->qid));
+		}
 
 	if (cmpl_ring->next_to_clean == cmpl_stat.pidx) {
 		if (debug)
@@ -603,7 +614,7 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 out_of_budget:
   for (int i = 0; i < work; i++) {
     struct page *pg = page_pool_dev_alloc_pages(q->page_pool);
-    if (likely(!pg)) {
+    if (likely(pg)) {
       // increment head
       onic_ring_increment_head(desc_ring);
       // refill next to use
@@ -629,11 +640,7 @@ out_of_budget:
   onic_set_completion_tail(priv->hw.qdma, qid, cmpl_ring->next_to_clean,
                            napi_cmpl_rval);
   onic_set_rx_head(priv->hw.qdma, q->qid, desc_ring->next_to_use);
-  // netdev_info(q->netdev,
-  //             "Returning from napi, work %5u, ntc %5u, ntu %5u, cidx %5u,
-  //             pidx %5u, error %5u", work, desc_ring->next_to_clean,
-  //             desc_ring->next_to_use, cmpl_stat.cidx, cmpl_stat.pidx,
-  //             cmpl_stat.error);
+  //netdev_info(q->netdev,"Returning from napi, work %5u, ntc %5u, ntu %5u, cidx %5u,  pidx %5u, error %2u", work, desc_ring->next_to_clean, desc_ring->next_to_use, cmpl_stat.cidx, cmpl_stat.pidx, cmpl_stat.error);
   if (debug)
     netdev_info(q->netdev, "rx_poll is done");
   if (debug)
@@ -654,7 +661,7 @@ static void onic_clear_tx_queue(struct onic_private *priv, u16 qid)
 	if (!q)
 		return;
 
-	onic_tx_clean(q);
+	onic_tx_clean(q, false);
 
 	onic_qdma_clear_tx_queue(priv->hw.qdma, qid);
 
@@ -816,6 +823,7 @@ static int onic_create_page_pool(struct onic_private *priv, struct onic_rx_queue
 		.offset    = XDP_PACKET_HEADROOM,
 		.max_len   = priv->netdev->mtu + ETH_HLEN,
 		.netdev    = priv->netdev,
+		.napi      = &q->napi,
 	};
 	int err;
 
@@ -1098,7 +1106,7 @@ netdev_tx_t onic_xmit_frame(struct sk_buff *skb, struct net_device *dev)
 	q = priv->tx_queue[qid];
 	ring = &q->ring;
 	
-	onic_tx_clean(q);
+	onic_tx_clean(q,false);
 
 	if (onic_ring_full(ring)) {
 		if (debug)
@@ -1272,6 +1280,7 @@ int onic_xdp_xmit(struct net_device *dev, int n, struct xdp_frame **frames, u32 
 		tx_queue->xdp_tx_stats.xdp_xmit_err++;
 		return -EINVAL;
 	}
+	onic_tx_clean(tx_queue, false);
 
 	tx_ring = &tx_queue->ring;
 	nq = netdev_get_tx_queue(tx_queue->netdev, tx_queue->qid);
