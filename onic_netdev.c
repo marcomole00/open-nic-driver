@@ -194,13 +194,16 @@ static bool onic_rx_refill(struct onic_rx_queue *q) {
 
 	// netdev_info(priv->netdev, "%s: allocated %d buffers, ntc %d ntu %d", __func__, buffers_allocated, desc_ring->next_to_clean, desc_ring->next_to_use);
   onic_set_rx_head(priv->hw.qdma, q->qid, desc_ring->next_to_use);
-  if (!xsk_uses_need_wakeup(q->xsk_pool))
-    return wake_up; // signal to the outer function to not call napi_complete_done,
-                 // because we have to reschedule
-  if (wake_up)
-    xsk_set_rx_need_wakeup(q->xsk_pool);
-  else
-    xsk_clear_rx_need_wakeup(q->xsk_pool);
+
+  if (q->xsk_pool) {
+    if (!xsk_uses_need_wakeup(q->xsk_pool))
+      return wake_up; // signal to the outer function to not call
+                      // napi_complete_done, because we have to reschedule
+    if (wake_up)
+      xsk_set_rx_need_wakeup(q->xsk_pool);
+    else
+      xsk_clear_rx_need_wakeup(q->xsk_pool);
+  }
   return false;
   }
 
@@ -637,8 +640,10 @@ static int onic_rx_poll(struct napi_struct *napi, int budget) {
   if (xdp_xmit & ONIC_XDP_REDIR)
     xdp_do_flush();
 
-  if (!xsk_uses_need_wakeup(q->xsk_pool) && alloc_err_xsk)
-    return budget - 1;
+  if (q->xsk_pool) {
+    if (!xsk_uses_need_wakeup(q->xsk_pool) && alloc_err_xsk)
+      return budget - 1;
+  }
   napi_cmpl_rval = napi_complete_done(napi, work);
 
   onic_set_completion_tail(priv->hw.qdma, qid, cmpl_ring->next_to_clean,
