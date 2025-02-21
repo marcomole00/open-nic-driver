@@ -152,8 +152,8 @@ int onic_xsk_wakeup(struct net_device *dev, u32 qid, u32 flags) {
     // will run on the current core. This shouldn't be a huge problems because
     // napi context is a softirq and it guarantees that the same napi instance
     // will not run on two different cores at the same time.
-    // napi_schedule(&rx_queue->napi);
-    onic_set_completion_tail(priv->hw.qdma, qid, rx_queue->cmpl_ring->next_to_clean,1)
+    napi_schedule(&rx_queue->napi);
+    // onic_set_completion_tail(priv->hw.qdma, qid, rx_queue->cmpl_ring->next_to_clean,1)
     // it's better because it generate an interrupt, triggered by the cidx update
 		// if the ring is empty it still does not generate an interrupt
   }
