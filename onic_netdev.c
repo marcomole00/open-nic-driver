@@ -122,7 +122,7 @@ static void onic_update_tx_need_wakeup(struct onic_tx_queue *q){
 
   struct qdma_wb_stat wb;
 
-  qdma_unpack_wb_stat(&wb, q->ring->wb);
+  qdma_unpack_wb_stat(&wb, q->ring.wb);
   if (q->xsk_pool && xsk_uses_need_wakeup(q->xsk_pool)) {
     if (wb.cidx == wb.pidx)
       xsk_set_tx_need_wakeup(q->xsk_pool);
@@ -145,7 +145,7 @@ static bool onic_rx_high_watermark(struct onic_rx_queue *q)
 }
 
 //TODO CHECK IF THIS WORKS CORRECTLY, PUT DEBUG INFORMATION IN CRITICAL PATH
-static void onic_rx_refill(struct onic_rx_queue *q) {
+static bool onic_rx_refill(struct onic_rx_queue *q) {
   struct onic_private *priv = netdev_priv(q->netdev);
   struct onic_ring *desc_ring = &q->desc_ring;
   struct qdma_c2h_st_desc desc;
@@ -411,6 +411,7 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 	bool flipped = 0;
 	bool debug = 0;
 	void *res;
+	bool alloc_err_xsk = false;
 
 	struct xdp_buff xdp;
 	unsigned int xdp_xmit = 0;
@@ -606,7 +607,7 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 			netdev_dbg(q->netdev, "High watermark: h = %d, t = %d",
 				   desc_ring->next_to_use,
 				   desc_ring->next_to_clean);
-			onic_rx_refill(q);
+			alloc_err_xsk = onic_rx_refill(q);
 		}
 
 		onic_ring_increment_tail(cmpl_ring);
@@ -661,41 +662,17 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 			netdev_dbg(q->netdev, "High watermark: h = %d, t = %d",
 				   desc_ring->next_to_use,
 				   desc_ring->next_to_clean);
-			onic_rx_refill(q);
+			alloc_err_xsk = onic_rx_refill(q);
 		}
 	if (xdp_xmit & ONIC_XDP_REDIR)
 		xdp_do_flush();
 
-	if (cmpl_ring->next_to_clean == cmpl_stat.pidx) {
-		if (debug)
-			netdev_info(
-				q->netdev,
-				"next_to_clean == cmpl_stat.pidx %u, napi_complete work %u, budget %u, rval %s",
-				cmpl_stat.pidx, work, budget,
-				napi_cmpl_rval ? "true" : "false");
-		napi_cmpl_rval = napi_complete_done(napi, work);
-		onic_set_completion_tail(priv->hw.qdma, qid,
-					 cmpl_ring->next_to_clean, 1);
-		if (debug)
-			netdev_info(q->netdev, "onic_set_completion_tail ");
-	} else if (cmpl_ring->next_to_clean == 0) {
-		if (debug)
-			netdev_info(
-				q->netdev,
-				"next_to_clean == 0, napi_complete work %u, budget %u, rval %s",
-				work, budget,
-				napi_cmpl_rval ? "true" : "false");
-		if (debug)
-			netdev_info(q->netdev,
-				    "napi_complete work %u, budget %u, rval %s",
-				    work, budget,
-				    napi_cmpl_rval ? "true" : "false");
-		napi_cmpl_rval = napi_complete_done(napi, work);
-		onic_set_completion_tail(priv->hw.qdma, qid,
-					 cmpl_ring->next_to_clean, 1);
-		if (debug)
-			netdev_info(q->netdev, "onic_set_completion_tail ");
-	}
+	if (!xsk_uses_need_wakeup(q->xsk_pool) && alloc_err_xsk) return budget -1;
+	napi_cmpl_rval = napi_complete_done(napi, work);
+	
+	onic_set_completion_tail(priv->hw.qdma, qid,
+					 cmpl_ring->next_to_clean, napi_cmpl_rval);
+	
 
 out_of_budget:
 	if (debug)
