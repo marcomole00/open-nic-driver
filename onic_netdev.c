@@ -118,13 +118,10 @@ void onic_tx_clean(struct onic_tx_queue *q) {
 }
 
 
-static void onic_update_tx_need_wakeup(struct onic_tx_queue *q){
+static void onic_update_tx_need_wakeup(struct onic_tx_queue *q, bool wake_up){
 
-  struct qdma_wb_stat wb;
-
-  qdma_unpack_wb_stat(&wb, q->ring.wb);
   if (q->xsk_pool && xsk_uses_need_wakeup(q->xsk_pool)) {
-    if (wb.cidx == wb.pidx)
+    if (wake_up)
       xsk_set_tx_need_wakeup(q->xsk_pool);
     else
       xsk_clear_tx_need_wakeup(q->xsk_pool);
@@ -413,6 +410,7 @@ static int onic_rx_poll(struct napi_struct *napi, int budget) {
   bool debug = 0;
   void *res;
   bool alloc_err_xsk = false;
+  bool tx_wake;
 
   struct xdp_buff xdp;
   unsigned int xdp_xmit = 0;
@@ -424,9 +422,9 @@ static int onic_rx_poll(struct napi_struct *napi, int budget) {
   for (i = 0; i < priv->num_tx_queues; i++) {
     onic_tx_clean(priv->tx_queue[i]);
     if (qid == i && test_bit(qid, priv->af_xdp_zc_qps) && q->xsk_pool) {
-      onic_update_tx_need_wakeup(priv->tx_queue[qid]);
-      budget -= onic_xsk_xmit(priv, priv->tx_queue[qid], budget);
-      onic_update_tx_need_wakeup(priv->tx_queue[qid]);
+      // onic_update_tx_need_wakeup(priv->tx_queue[qid]);
+      tx_wake = onic_xsk_xmit(priv, priv->tx_queue[qid]);
+      onic_update_tx_need_wakeup(priv->tx_queue[qid], wake_up);
       // double update to prevent the following race condition
 
       //		  Driver
