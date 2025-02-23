@@ -424,7 +424,7 @@ static int onic_rx_poll(struct napi_struct *napi, int budget) {
     if (qid == i && test_bit(qid, priv->af_xdp_zc_qps) && q->xsk_pool) {
       // onic_update_tx_need_wakeup(priv->tx_queue[qid]);
       tx_wake = onic_xsk_xmit(priv, priv->tx_queue[qid]);
-      onic_update_tx_need_wakeup(priv->tx_queue[qid], wake_up);
+      onic_update_tx_need_wakeup(priv->tx_queue[qid], tx_wake);
       // double update to prevent the following race condition
 
       //		  Driver
