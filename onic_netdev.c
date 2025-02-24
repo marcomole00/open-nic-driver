@@ -200,7 +200,7 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
 	if (onic_ring_full(ring)) {
 		if (debug)
 			netdev_info(priv->netdev, "ring is full");
-		return NETDEV_TX_BUSY;
+		return ONIC_XDP_CONSUMED;
 	}
 
 	if (dma_map) {
@@ -212,7 +212,6 @@ static int onic_xmit_xdp_ring(struct onic_private *priv,struct  onic_tx_queue  *
 	} else {
 		/* ONIC_XDP_TX */
 		struct page *page = virt_to_page(xdpf->data);
-		//TODO  i don't get why adding the size of the xdp_frame struct to the dma_addr. mvneta does this 
 		dma_addr = page_pool_get_dma_addr(page) + sizeof(*xdpf) + xdpf->headroom;
 		dma_sync_single_for_device(&priv->pdev->dev, dma_addr,
 					   xdpf->len, DMA_BIDIRECTIONAL);
@@ -1268,7 +1267,7 @@ int onic_xdp_xmit(struct net_device *dev, int n, struct xdp_frame **frames, u32 
 	struct onic_ring *tx_ring;
 	struct onic_tx_queue *tx_queue;
 	struct netdev_queue *nq;
-	int i, drops = 0, cpu;
+	int i, ok = 0, cpu;
 	
 	 
 	cpu  = smp_processor_id();
@@ -1293,12 +1292,12 @@ int onic_xdp_xmit(struct net_device *dev, int n, struct xdp_frame **frames, u32 
 		err = 0;
 		err = onic_xmit_xdp_ring(priv, tx_queue, frame, true);
 		if (err != ONIC_XDP_TX) {
-			xdp_return_frame(frame);
 			netdev_err(dev, "Failed to transmit frame");
 			tx_queue->xdp_tx_stats.xdp_xmit_err++;
-			drops++;
+			break;
 		} else {
 			tx_queue->xdp_tx_stats.xdp_xmit++;
+			ok++;
 		}
 	}
 
@@ -1308,6 +1307,6 @@ int onic_xdp_xmit(struct net_device *dev, int n, struct xdp_frame **frames, u32 
 	}
 	__netif_tx_unlock(nq);
 
-	return n - drops;
+	return ok;
 }
 
