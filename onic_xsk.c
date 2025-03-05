@@ -9,6 +9,7 @@
 #include "onic_xsk.h"
 #include "onic_lib.h"
 #include "onic_netdev.h"
+#include "xclbin.h"
 
 bool onic_xsk_xmit(struct onic_private *priv, struct onic_tx_queue *q)
 {
@@ -20,7 +21,9 @@ bool onic_xsk_xmit(struct onic_private *priv, struct onic_tx_queue *q)
 	struct xdp_desc xdp_desc;
 	int trasmitted = 0;
 	bool wake_up = false;
-	while (ring->next_to_use != ring->next_to_clean)
+	int unused = (ring->next_to_clean > ring->next_to_use? 0 :
+		onic_ring_get_real_count(ring)) + ring->next_to_clean- ring->next_to_use - 1;
+	while (trasmitted < unused)
 	{
 		// xsk_tx_peek_desc it's the function that fetches the xdp frames from the
 		// TX ring of the xsk buff pool
@@ -50,7 +53,7 @@ bool onic_xsk_xmit(struct onic_private *priv, struct onic_tx_queue *q)
 	}
 	if (trasmitted)
 		xsk_tx_release(q->xsk_pool);
-	// wmb();
+
 	onic_set_tx_head(priv->hw.qdma, q->qid, ring->next_to_use);
 	return wake_up;
 }

@@ -617,8 +617,8 @@ static int onic_rx_poll(struct napi_struct *napi, int budget) {
         xdp_do_flush();
       if (debug)
         netdev_info(q->netdev, "watchdog work %u, budget %u", work, budget);
-      napi_complete(napi);
-      napi_reschedule(napi);
+      // napi_complete(napi);
+      // napi_reschedule(napi);
       goto out_of_budget;
     }
 
@@ -640,7 +640,7 @@ static int onic_rx_poll(struct napi_struct *napi, int budget) {
 
   if (q->xsk_pool) {
     if (!xsk_uses_need_wakeup(q->xsk_pool) && alloc_err_xsk)
-      return budget - 1;
+      return budget;
   }
   napi_cmpl_rval = napi_complete_done(napi, work);
 
