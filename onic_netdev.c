@@ -141,7 +141,6 @@ static bool onic_rx_high_watermark(struct onic_rx_queue *q)
 	return (unused < (ONIC_RX_DESC_STEP / 2));
 }
 
-//TODO CHECK IF THIS WORKS CORRECTLY, PUT DEBUG INFORMATION IN CRITICAL PATH
 static bool onic_rx_refill(struct onic_rx_queue *q) {
   struct onic_private *priv = netdev_priv(q->netdev);
   struct onic_ring *desc_ring = &q->desc_ring;
@@ -392,270 +391,257 @@ out:
 	return ERR_PTR(-result);
 }
 
-static int onic_rx_poll(struct napi_struct *napi, int budget) {
-  struct onic_rx_queue *q = container_of(napi, struct onic_rx_queue, napi);
-  struct onic_private *priv = netdev_priv(q->netdev);
-  u16 qid = q->qid;
-  struct onic_ring *desc_ring = &q->desc_ring;
-  struct onic_ring *cmpl_ring = &q->cmpl_ring;
-  struct qdma_c2h_cmpl cmpl;
-  struct qdma_c2h_cmpl_stat cmpl_stat;
-  u8 *cmpl_ptr;
-  u8 *cmpl_stat_ptr;
-  u32 color_stat;
-  int work = 0;
-  int i, rv, err;
-  bool napi_cmpl_rval = 0;
-  bool flipped = 0;
-  bool debug = 0;
-  void *res;
-  bool alloc_err_xsk = false;
-  bool tx_wake;
+// static int onic_rx_poll(struct napi_struct *napi, int budget) {
+//   struct onic_rx_queue *q = container_of(napi, struct onic_rx_queue, napi);
+//   struct onic_private *priv = netdev_priv(q->netdev);
+//   u16 qid = q->qid;
+//   struct onic_ring *desc_ring = &q->desc_ring;
+//   struct onic_ring *cmpl_ring = &q->cmpl_ring;
+//   struct qdma_c2h_cmpl cmpl;
+//   struct qdma_c2h_cmpl_stat cmpl_stat;
+//   u8 *cmpl_ptr;
+//   u8 *cmpl_stat_ptr;
+//   u32 color_stat;
+//   int work = 0;
+//   int i, rv, err;
+//   bool napi_cmpl_rval = 0;
+//   bool flipped = 0;
+//   bool debug = 0;
+//   void *res;
+//   bool alloc_err_xsk = false;
+//   bool tx_wake;
 
-  struct xdp_buff xdp;
-  unsigned int xdp_xmit = 0;
-  struct rtnl_link_stats64 *pcpu_stats_pointer;
-  pcpu_stats_pointer = this_cpu_ptr(priv->netdev_stats);
+//   struct xdp_buff xdp;
+//   unsigned int xdp_xmit = 0;
+//   struct rtnl_link_stats64 *pcpu_stats_pointer;
+//   pcpu_stats_pointer = this_cpu_ptr(priv->netdev_stats);
 
-  if (debug)
-    netdev_info(q->netdev, "%s qid %d", __func__, qid);
-  for (i = 0; i < priv->num_tx_queues; i++) {
-    onic_tx_clean(priv->tx_queue[i]);
-    if (qid == i && test_bit(qid, priv->af_xdp_zc_qps) && q->xsk_pool) {
-      // onic_update_tx_need_wakeup(priv->tx_queue[qid]);
-      tx_wake = onic_xsk_xmit(priv, priv->tx_queue[qid]);
-      onic_update_tx_need_wakeup(priv->tx_queue[qid], tx_wake);
-      // double update to prevent the following race condition
+//   if (debug)
+//     netdev_info(q->netdev, "%s qid %d", __func__, qid);
 
-      //		  Driver
-      //||  Application 		  Transmit	 packets
-      //																								  ||
-      //Put new packets to transmit
-      //											  												  ||
-      //Query need_wakeup – it’s false 		  Hardware queue is empty, set need_wakeup
-      //		  Waits for the wakeup syscall
-      //||  Doesn’t call the wakeup syscall
-    }
-  }
 
-  cmpl_ptr = cmpl_ring->desc + QDMA_C2H_CMPL_SIZE * cmpl_ring->next_to_clean;
-  cmpl_stat_ptr = cmpl_ring->desc + QDMA_C2H_CMPL_SIZE * (cmpl_ring->count - 1);
+//   cmpl_ptr = cmpl_ring->desc + QDMA_C2H_CMPL_SIZE * cmpl_ring->next_to_clean;
+//   cmpl_stat_ptr = cmpl_ring->desc + QDMA_C2H_CMPL_SIZE * (cmpl_ring->count - 1);
 
-  qdma_unpack_c2h_cmpl(&cmpl, cmpl_ptr);
-  qdma_unpack_c2h_cmpl_stat(&cmpl_stat, cmpl_stat_ptr);
+//   qdma_unpack_c2h_cmpl(&cmpl, cmpl_ptr);
+//   qdma_unpack_c2h_cmpl_stat(&cmpl_stat, cmpl_stat_ptr);
 
-  color_stat = cmpl_stat.color;
-  if (debug)
-    netdev_info(q->netdev,
-                "\n rx_poll:  cmpl_stat_pidx %u, color_cmpl_stat %u, cmpl_ring "
-                "next_to_clean %u, cmpl_stat_cidx %u, intr_state %u, "
-                "cmpl_ring->count %u",
-                cmpl_stat.pidx, color_stat, cmpl_ring->next_to_clean,
-                cmpl_stat.cidx, cmpl_stat.intr_state, cmpl_ring->count);
+//   color_stat = cmpl_stat.color;
+//   if (debug)
+//     netdev_info(q->netdev,
+//                 "\n rx_poll:  cmpl_stat_pidx %u, color_cmpl_stat %u, cmpl_ring "
+//                 "next_to_clean %u, cmpl_stat_cidx %u, intr_state %u, "
+//                 "cmpl_ring->count %u",
+//                 cmpl_stat.pidx, color_stat, cmpl_ring->next_to_clean,
+//                 cmpl_stat.cidx, cmpl_stat.intr_state, cmpl_ring->count);
 
-  if (debug)
-    netdev_info(q->netdev,
-                "c2h_cmpl pkt_id %u, pkt_len %u, error %u, color %u "
-                "cmpl_ring->color:%u",
-                cmpl.pkt_id, cmpl.pkt_len, cmpl.err, cmpl.color,
-                cmpl_ring->color);
+//   if (debug)
+//     netdev_info(q->netdev,
+//                 "c2h_cmpl pkt_id %u, pkt_len %u, error %u, color %u "
+//                 "cmpl_ring->color:%u",
+//                 cmpl.pkt_id, cmpl.pkt_len, cmpl.err, cmpl.color,
+//                 cmpl_ring->color);
 
-  /* Color of completion entries and completion ring are initialized to 0
-   * and 1 respectively.  When an entry is filled, it has a color bit of
-   * 1, thus making it the same as the completion ring color.  A different
-   * color indicates that we are done with the current batch.  When the
-   * ring index wraps around, the color flips in both software and
-   * hardware.  Therefore, it becomes that completion entries are filled
-   * with a color 0, and completion ring has a color 0 as well.
-   */
-  if (cmpl.color != cmpl_ring->color) {
-    if (debug)
-      netdev_info(q->netdev,
-                  "color mismatch1: cmpl.color %u, cmpl_ring->color %u  "
-                  "cmpl_stat_color %u",
-                  cmpl.color, cmpl_ring->color, color_stat);
-  }
+//   /* Color of completion entries and completion ring are initialized to 0
+//    * and 1 respectively.  When an entry is filled, it has a color bit of
+//    * 1, thus making it the same as the completion ring color.  A different
+//    * color indicates that we are done with the current batch.  When the
+//    * ring index wraps around, the color flips in both software and
+//    * hardware.  Therefore, it becomes that completion entries are filled
+//    * with a color 0, and completion ring has a color 0 as well.
+//    */
+//   if (cmpl.color != cmpl_ring->color) {
+//     if (debug)
+//       netdev_info(q->netdev,
+//                   "color mismatch1: cmpl.color %u, cmpl_ring->color %u  "
+//                   "cmpl_stat_color %u",
+//                   cmpl.color, cmpl_ring->color, color_stat);
+//   }
 
-  if (cmpl.err == 1) {
-    if (debug)
-      netdev_info(q->netdev, "completion error detected in cmpl entry!");
-    // todo: need to handle the error ...
-    onic_qdma_clear_error_interrupt(priv->hw.qdma);
-  }
+//   if (cmpl.err == 1) {
+//     if (debug)
+//       netdev_info(q->netdev, "completion error detected in cmpl entry!");
+//     // todo: need to handle the error ...
+//     onic_qdma_clear_error_interrupt(priv->hw.qdma);
+//   }
 
-  // main processing loop for rx_poll
-  while ((cmpl_ring->next_to_clean != cmpl_stat.pidx)) {
+//   // main processing loop for rx_poll
+//   while ((cmpl_ring->next_to_clean != cmpl_stat.pidx)) {
 
-    struct sk_buff *skb;
-    int xdp_result;
+//     struct sk_buff *skb;
+//     int xdp_result;
 
-    int len = cmpl.pkt_len;
+//     int len = cmpl.pkt_len;
 
-    if (!!q->xsk_pool != !!test_bit(qid, priv->af_xdp_zc_qps)) {
-      netdev_err(q->netdev, "xsk_pool and af_xdp_zc_qps are not in sync");
-    }
+//     if (!!q->xsk_pool != !!test_bit(qid, priv->af_xdp_zc_qps)) {
+//       netdev_err(q->netdev, "xsk_pool and af_xdp_zc_qps are not in sync");
+//     }
 
-    if (q->xsk_pool && test_bit(qid, priv->af_xdp_zc_qps)) {
+//     if (q->xsk_pool && test_bit(qid, priv->af_xdp_zc_qps)) {
 
-      struct xdp_buff *xdp_buff = q->xdps[desc_ring->next_to_clean];
-      if (!q->xdp_prog) {
-        netdev_err(q->netdev,
-                   "XSK pool is present with no XDP program. No further packet "
-                   "will be processed as this is a transient state");
-        break;
-      }
-      // todo copy from consume_zc
-      xdp_buff->data_end = xdp_buff->data + len;
-      xsk_buff_dma_sync_for_cpu(xdp_buff, q->xsk_pool);
-      xdp_result = onic_run_xdp_zc(q, xdp_buff);
-      xdp_xmit |= xdp_result;
-      if (xdp_result == ONIC_XDP_CONSUMED) {
-        xsk_buff_free(xdp_buff);
-      } else if (xdp_result == ONIC_XDP_PASS) {
-        skb = onic_xsk_construct_skb(napi, xdp_buff);
-        if (skb) {
-          skb_record_rx_queue(skb, q->qid);
-          skb->protocol = eth_type_trans(skb, q->netdev);
-          err = napi_gro_receive(napi, skb);
-          if (err < 0) {
-            netdev_err(q->netdev, "napi_gro_receive, err = %d", rv);
-          }
-        }
-        xsk_buff_free(xdp_buff);
-      }
-    } else {
-      struct onic_rx_buffer *buf = &q->buffer[desc_ring->next_to_clean];
-      xdp_init_buff(&xdp, PAGE_SIZE, &q->xdp_rxq);
+//       struct xdp_buff *xdp_buff = q->xdps[desc_ring->next_to_clean];
+//       if (!q->xdp_prog) {
+//         netdev_err(q->netdev,
+//                    "XSK pool is present with no XDP program. No further packet "
+//                    "will be processed as this is a transient state");
+//         break;
+//       }
+//       // todo copy from consume_zc
+//       xdp_buff->data_end = xdp_buff->data + len;
+//       xsk_buff_dma_sync_for_cpu(xdp_buff, q->xsk_pool);
+//       xdp_result = onic_run_xdp_zc(q, xdp_buff);
+//       xdp_xmit |= xdp_result;
+//       if (xdp_result == ONIC_XDP_CONSUMED) {
+//         xsk_buff_free(xdp_buff);
+//       } else if (xdp_result == ONIC_XDP_PASS) {
+//         skb = onic_xsk_construct_skb(napi, xdp_buff);
+//         if (skb) {
+//           skb_record_rx_queue(skb, q->qid);
+//           skb->protocol = eth_type_trans(skb, q->netdev);
+//           err = napi_gro_receive(napi, skb);
+//           if (err < 0) {
+//             netdev_err(q->netdev, "napi_gro_receive, err = %d", rv);
+//           }
+//         }
+//         xsk_buff_free(xdp_buff);
+//       }
+//     } else {
+//       struct onic_rx_buffer *buf = &q->buffer[desc_ring->next_to_clean];
+//       xdp_init_buff(&xdp, PAGE_SIZE, &q->xdp_rxq);
 
-      dma_sync_single_for_cpu(&priv->pdev->dev,
-                              page_pool_get_dma_addr(buf->pg) + buf->offset,
-                              len, DMA_FROM_DEVICE);
+//       dma_sync_single_for_cpu(&priv->pdev->dev,
+//                               page_pool_get_dma_addr(buf->pg) + buf->offset,
+//                               len, DMA_FROM_DEVICE);
 
-      xdp_prepare_buff(&xdp, page_address(buf->pg), buf->offset, len, false);
+//       xdp_prepare_buff(&xdp, page_address(buf->pg), buf->offset, len, false);
 
-      res = onic_run_xdp(q, &xdp);
-      if (IS_ERR(res)) {
-        unsigned int xdp_res = -PTR_ERR(res);
+//       res = onic_run_xdp(q, &xdp);
+//       if (IS_ERR(res)) {
+//         unsigned int xdp_res = -PTR_ERR(res);
 
-        if (xdp_res & (ONIC_XDP_TX | ONIC_XDP_REDIR)) {
-          xdp_xmit |= xdp_res;
-        }
+//         if (xdp_res & (ONIC_XDP_TX | ONIC_XDP_REDIR)) {
+//           xdp_xmit |= xdp_res;
+//         }
 
-        // Allocate skb only if we are continuing to process the packet
-        if (xdp_res & ONIC_XDP_PASS) {
+//         // Allocate skb only if we are continuing to process the packet
+//         if (xdp_res & ONIC_XDP_PASS) {
 
-          // allocate a new skb structure around the data
-          skb = napi_build_skb(xdp.data_hard_start, PAGE_SIZE);
+//           // allocate a new skb structure around the data
+//           skb = napi_build_skb(xdp.data_hard_start, PAGE_SIZE);
 
-          if (!skb) {
-            rv = -ENOMEM;
-            break;
-          }
+//           if (!skb) {
+//             rv = -ENOMEM;
+//             break;
+//           }
 
-          // mark the skb for page_pool recycling
-          skb_mark_for_recycle(skb);
-          // reserve space in the skb for the data for the xdp headroom
-          skb_reserve(skb, xdp.data - xdp.data_hard_start);
-          // set the data pointer
-          skb_put(skb, xdp.data_end - xdp.data);
+//           // mark the skb for page_pool recycling
+//           skb_mark_for_recycle(skb);
+//           // reserve space in the skb for the data for the xdp headroom
+//           skb_reserve(skb, xdp.data - xdp.data_hard_start);
+//           // set the data pointer
+//           skb_put(skb, xdp.data_end - xdp.data);
 
-          skb->protocol = eth_type_trans(skb, q->netdev);
-          skb->ip_summed = CHECKSUM_NONE;
-          skb_record_rx_queue(skb, qid);
-          rv = napi_gro_receive(napi, skb);
-          if (rv < 0) {
-            netdev_err(q->netdev, "napi_gro_receive, err = %d", rv);
-            break;
-          }
-        }
-      }
-    }
+//           skb->protocol = eth_type_trans(skb, q->netdev);
+//           skb->ip_summed = CHECKSUM_NONE;
+//           skb_record_rx_queue(skb, qid);
+//           rv = napi_gro_receive(napi, skb);
+//           if (rv < 0) {
+//             netdev_err(q->netdev, "napi_gro_receive, err = %d", rv);
+//             break;
+//           }
+//         }
+//       }
+//     }
 
-    pcpu_stats_pointer->rx_packets++;
-    pcpu_stats_pointer->rx_bytes += len;
+//     pcpu_stats_pointer->rx_packets++;
+//     pcpu_stats_pointer->rx_bytes += len;
 
-    onic_ring_increment_tail(desc_ring);
+//     onic_ring_increment_tail(desc_ring);
 
-    if (debug)
-      netdev_info(q->netdev, "desc_ring %u next_to_use:%u next_to_clean:%u",
-                  onic_ring_get_real_count(desc_ring), desc_ring->next_to_use,
-                  desc_ring->next_to_clean);
-    if (onic_ring_full(desc_ring)) {
-      netdev_dbg(q->netdev, "desc_ring full");
-    }
+//     if (debug)
+//       netdev_info(q->netdev, "desc_ring %u next_to_use:%u next_to_clean:%u",
+//                   onic_ring_get_real_count(desc_ring), desc_ring->next_to_use,
+//                   desc_ring->next_to_clean);
+//     if (onic_ring_full(desc_ring)) {
+//       netdev_dbg(q->netdev, "desc_ring full");
+//     }
 
-    if (onic_rx_high_watermark(q)) {
-      netdev_dbg(q->netdev, "High watermark: h = %d, t = %d",
-                 desc_ring->next_to_use, desc_ring->next_to_clean);
-      alloc_err_xsk = onic_rx_refill(q);
-    }
+//     if (onic_rx_high_watermark(q)) {
+//       netdev_dbg(q->netdev, "High watermark: h = %d, t = %d",
+//                  desc_ring->next_to_use, desc_ring->next_to_clean);
+//       alloc_err_xsk = onic_rx_refill(q);
+//     }
 
-    onic_ring_increment_tail(cmpl_ring);
+//     onic_ring_increment_tail(cmpl_ring);
 
-    if (debug)
-      netdev_info(q->netdev,
-                  "cmpl_ring %u next_to_use:%u next_to_clean:%u, flipped:%s",
-                  onic_ring_get_real_count(cmpl_ring), cmpl_ring->next_to_use,
-                  cmpl_ring->next_to_clean, flipped ? "true" : "false");
-    if (onic_ring_full(cmpl_ring)) {
-      netdev_dbg(q->netdev, "cmpl_ring full");
-    }
-    if (cmpl.color != cmpl_ring->color) {
-      if (debug)
-        netdev_info(q->netdev,
-                    "part 1. cmpl_ring->next_to_clean=%u color *** old fliping "
-                    "*** color[%u]",
-                    cmpl_ring->next_to_clean, cmpl_ring->color);
-      cmpl_ring->color = (cmpl_ring->color == 0) ? 1 : 0;
-      flipped = 1;
-    }
-    cmpl_ptr =
-        cmpl_ring->desc + (QDMA_C2H_CMPL_SIZE * cmpl_ring->next_to_clean);
+//     if (debug)
+//       netdev_info(q->netdev,
+//                   "cmpl_ring %u next_to_use:%u next_to_clean:%u, flipped:%s",
+//                   onic_ring_get_real_count(cmpl_ring), cmpl_ring->next_to_use,
+//                   cmpl_ring->next_to_clean, flipped ? "true" : "false");
+//     if (onic_ring_full(cmpl_ring)) {
+//       netdev_dbg(q->netdev, "cmpl_ring full");
+//     }
+//     if (cmpl.color != cmpl_ring->color) {
+//       if (debug)
+//         netdev_info(q->netdev,
+//                     "part 1. cmpl_ring->next_to_clean=%u color *** old fliping "
+//                     "*** color[%u]",
+//                     cmpl_ring->next_to_clean, cmpl_ring->color);
+//       cmpl_ring->color = (cmpl_ring->color == 0) ? 1 : 0;
+//       flipped = 1;
+//     }
+//     cmpl_ptr =
+//         cmpl_ring->desc + (QDMA_C2H_CMPL_SIZE * cmpl_ring->next_to_clean);
 
-    if ((++work) >= budget) {
-      if (xdp_xmit & ONIC_XDP_REDIR)
-        xdp_do_flush();
-      if (debug)
-        netdev_info(q->netdev, "watchdog work %u, budget %u", work, budget);
-      // napi_complete(napi);
-      // napi_reschedule(napi);
-      goto out_of_budget;
-    }
+//     if ((++work) >= budget) {
+//       if (xdp_xmit & ONIC_XDP_REDIR)
+//         xdp_do_flush();
+//       if (debug)
+//         netdev_info(q->netdev, "watchdog work %u, budget %u", work, budget);
+//       // napi_complete(napi);
+//       // napi_reschedule(napi);
+//       goto out_of_budget;
+//     }
 
-    qdma_unpack_c2h_cmpl(&cmpl, cmpl_ptr);
+//     qdma_unpack_c2h_cmpl(&cmpl, cmpl_ptr);
 
-    if (debug)
-      netdev_info(q->netdev,
-                  "c2h_cmpl(b) pkt_id %u, pkt_len %u, error %u, color %u",
-                  cmpl.pkt_id, cmpl.pkt_len, cmpl.err, cmpl.color);
-  }
+//     if (debug)
+//       netdev_info(q->netdev,
+//                   "c2h_cmpl(b) pkt_id %u, pkt_len %u, error %u, color %u",
+//                   cmpl.pkt_id, cmpl.pkt_len, cmpl.err, cmpl.color);
+//   }
 
-  if (onic_rx_high_watermark(q)) {
-    netdev_dbg(q->netdev, "High watermark: h = %d, t = %d",
-               desc_ring->next_to_use, desc_ring->next_to_clean);
-    alloc_err_xsk = onic_rx_refill(q);
-  }
-  if (xdp_xmit & ONIC_XDP_REDIR)
-    xdp_do_flush();
+//   if (onic_rx_high_watermark(q)) {
+//     netdev_dbg(q->netdev, "High watermark: h = %d, t = %d",
+//                desc_ring->next_to_use, desc_ring->next_to_clean);
+//     alloc_err_xsk = onic_rx_refill(q);
+//   }
+//   if (xdp_xmit & ONIC_XDP_REDIR)
+//     xdp_do_flush();
 
-  if (q->xsk_pool) {
-    if (!xsk_uses_need_wakeup(q->xsk_pool) && alloc_err_xsk)
-      return budget;
-  }
-  napi_cmpl_rval = napi_complete_done(napi, work);
+//   napi_cmpl_rval = napi_complete_done(napi, work);
 
-  onic_set_completion_tail(priv->hw.qdma, qid, cmpl_ring->next_to_clean,
-                           napi_cmpl_rval);
+//   onic_set_completion_tail(priv->hw.qdma, qid, cmpl_ring->next_to_clean,
+//                            napi_cmpl_rval);
 
-out_of_budget:
-  if (debug)
-    netdev_info(q->netdev, "rx_poll is done");
-  if (debug)
-    netdev_info(
-        q->netdev, "rx_poll returning work %u, rx_packets %lld, rx_bytes %lld",
-        work, pcpu_stats_pointer->rx_packets, pcpu_stats_pointer->rx_bytes);
-  return work;
-}
+//   if (q->xsk_pool) {
+//     if (!xsk_uses_need_wakeup(q->xsk_pool) && alloc_err_xsk)
+//     // if the pool is not using wake up and the fill ring is empty : reschedule
+//       return budget;
+//   }
+// out_of_budget:
+//   if (debug)
+//     netdev_info(q->netdev, "rx_poll is done");
+//   if (debug)
+//     netdev_info(
+//         q->netdev, "rx_poll returning work %u, rx_packets %lld, rx_bytes %lld",
+//         work, pcpu_stats_pointer->rx_packets, pcpu_stats_pointer->rx_bytes);
+//   return work;
+// }
+
+
+
 int onic_ring_get_occupancy(struct onic_ring *ring) {
 	int ntc = ring->next_to_clean;
 	int ntu = ring->next_to_use;
@@ -896,209 +882,7 @@ err_free_pp:
 	return err;
 }
 
- int onic_init_rx_queue(struct onic_private *priv, u16 qid)
-{
-	// TODO: make these configurable via ethtool
-	const u8 bufsz_idx = 8;
-	const u8 desc_rngcnt_idx = 8;
-	//const u8 cmpl_rngcnt_idx = 15;
-	const u8 cmpl_rngcnt_idx = 8;
-	struct net_device *dev = priv->netdev;
-	struct onic_rx_queue *q;
-	struct onic_ring *ring;
-	struct onic_qdma_c2h_param param;
-	u16 vid;
-	u32 size, real_count;
-	int i, rv;
-	bool debug = 1;
-	int err;
-	int buffers_allocated = 0;
-	
-	if (priv->rx_queue[qid]) {
-		if (debug)
-			netdev_info(dev, "Re-initializing RX queue %d", qid);
-		onic_clear_rx_queue(priv, qid);
-	}
-
-	q = kzalloc(sizeof(struct onic_rx_queue), GFP_KERNEL);
-	if (!q)
-		return -ENOMEM;
-
-	/* evenly assign to RX queues available vectors */
-	vid = qid % priv->num_q_vectors;
-
-	q->netdev = dev;
-	q->vector = priv->q_vector[vid];
-	q->qid = qid;
-
-	q->xdp_prog = priv->xdp_prog;
-
-	/* allocate DMA memory for RX descriptor ring */
-	ring = &q->desc_ring;
-	ring->count = onic_ring_count(desc_rngcnt_idx);
-	real_count = ring->count - 1;
-
-	size = QDMA_C2H_ST_DESC_SIZE * real_count + QDMA_WB_STAT_SIZE;
-	size = ALIGN(size, PAGE_SIZE);
-	ring->desc = dma_alloc_coherent(&priv->pdev->dev, size, &ring->dma_addr,
-					GFP_KERNEL);
-	if (!ring->desc) {
-		rv = -ENOMEM;
-		goto clear_rx_queue;
-	}
-	memset(ring->desc, 0, size);
-	ring->wb = ring->desc + QDMA_C2H_ST_DESC_SIZE * real_count;
-	ring->next_to_use = 0;
-	ring->next_to_clean = 0;
-	ring->color = 0;
-
-	if (test_bit(qid, priv->af_xdp_zc_qps)) {
-		q->xsk_pool = xsk_get_pool_from_qid(dev, qid);
-		if (!q->xsk_pool) {
-			rv = -ENOMEM;
-			netdev_err(dev, "fatal error: xsk_pool is NULL at queue %d but the state bit is set", qid);
-			goto clear_rx_queue;
-		}
-
-
-		err = xdp_rxq_info_reg(&q->xdp_rxq, priv->netdev, q->qid, 0);
-		if (err)
-			goto clear_rx_queue;
-
-		err = xdp_rxq_info_reg_mem_model(&q->xdp_rxq, MEM_TYPE_XSK_BUFF_POOL,
-						NULL);
-		if (err)
-			goto clear_rx_queue;
-		
-		xsk_pool_set_rxq_info(q->xsk_pool, &q->xdp_rxq);
-
-		// af_xdp zero copy allocator stuff
-		q->xdps = kcalloc(real_count, sizeof(struct xdp_buff *), GFP_KERNEL);
-		if (!q->xdps) {
-			rv = -ENOMEM;
-			goto clear_rx_queue;
-		}
-
-		for (i = 0; i < ONIC_RX_DESC_STEP; ++i) {
-			q->xdps[i] = xsk_buff_alloc(q->xsk_pool);
-			if (!q->xdps[i]) {
-				netdev_err(dev, "xsk_buff_alloc failed at %d", i);
-				break;
-			}
-		}
-
-		buffers_allocated = i;
-
-		for (i=0; i < buffers_allocated; ++i) {
-
-			u8 *desc_ptr = ring->desc + QDMA_C2H_ST_DESC_SIZE * i;
-			struct qdma_c2h_st_desc desc;
-			desc.dst_addr = xsk_buff_xdp_get_dma(q->xdps[i]);
-			qdma_pack_c2h_st_desc(desc_ptr, &desc);
-
-		}
-	} else {
-		// normal page pool stuff
-		/* initialize RX buffers */
-		q->buffer =
-			kcalloc(real_count, sizeof(struct onic_rx_buffer), GFP_KERNEL);
-		if (!q->buffer) {
-			rv = -ENOMEM;
-			goto clear_rx_queue;
-		}
-
-		rv = onic_create_page_pool(priv, q, real_count);
-		if (rv < 0)
-			goto clear_rx_queue;
-		
-
-		for (i = 0; i < ONIC_RX_DESC_STEP; ++i) {
-			struct page *pg = page_pool_dev_alloc_pages(q->page_pool);
-
-			if (!pg) {
-				netdev_err(dev, "page_pool_dev_alloc_pages failed at %d", i);
-				break;
-			}
-
-			q->buffer[i].pg = pg;
-			q->buffer[i].offset = XDP_PACKET_HEADROOM;
-		}
-
-		buffers_allocated = i;
-
-		/* map pages and initialize descriptors */
-		for (i = 0; i < buffers_allocated ; ++i) {
-			u8 *desc_ptr = ring->desc + QDMA_C2H_ST_DESC_SIZE * i;
-			struct qdma_c2h_st_desc desc;
-			struct page *pg = q->buffer[i].pg;
-			unsigned int offset = q->buffer[i].offset;
-
-			desc.dst_addr = page_pool_get_dma_addr(pg) + offset;
-			qdma_pack_c2h_st_desc(desc_ptr, &desc);
-		}
-
-	}
-
-
-	/* allocate DMA memory for completion ring */
-	ring = &q->cmpl_ring;
-	ring->count = onic_ring_count(cmpl_rngcnt_idx);
-	real_count = ring->count - 1;
-
-	size = QDMA_C2H_CMPL_SIZE * real_count + QDMA_C2H_CMPL_STAT_SIZE;
-	size = ALIGN(size, PAGE_SIZE);
-	ring->desc = dma_alloc_coherent(&priv->pdev->dev, size, &ring->dma_addr,
-					GFP_KERNEL);
-	if (!ring->desc) {
-		rv = -ENOMEM;
-		goto clear_rx_queue;
-	}
-	memset(ring->desc, 0, size);
-	ring->wb = ring->desc + QDMA_C2H_CMPL_SIZE * real_count;
-	ring->next_to_use = 0;
-	ring->next_to_clean = 0;
-	ring->color = 1;
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,1,0)
-	netif_napi_add(dev, &q->napi, onic_rx_poll);
-#else
-	netif_napi_add(dev, &q->napi, onic_rx_poll, 64);
-#endif
-	napi_enable(&q->napi);
-
-	/* initialize QDMA C2H queue */
-	param.bufsz_idx = bufsz_idx;
-	param.desc_rngcnt_idx = desc_rngcnt_idx;
-	param.cmpl_rngcnt_idx = cmpl_rngcnt_idx;
-	param.cmpl_desc_sz = 0;
-	param.desc_dma_addr = q->desc_ring.dma_addr;
-	param.cmpl_dma_addr = q->cmpl_ring.dma_addr;
-	param.vid = vid;
-	if (debug)
-		netdev_info(
-			dev,
-			"bufsz_idx %u, desc_rngcnt_idx %u, cmpl_rngcnt_idx %u, desc_dma_addr 0x%llx, cmpl_dma_addr 0x%llx, vid %d",
-			bufsz_idx, desc_rngcnt_idx, cmpl_rngcnt_idx,
-			q->desc_ring.dma_addr, q->cmpl_ring.dma_addr, vid);
-
-	rv = onic_qdma_init_rx_queue(priv->hw.qdma, qid, &param);
-	if (rv < 0)
-		goto clear_rx_queue;
-
-	/* fill RX descriptor ring with a few descriptors */
-	q->desc_ring.next_to_use =  min(buffers_allocated , ONIC_RX_DESC_STEP);
-	onic_set_rx_head(priv->hw.qdma, qid, q->desc_ring.next_to_use);
-	onic_set_completion_tail(priv->hw.qdma, qid, 0, 1);
-
-	priv->rx_queue[qid] = q;
-	return 0;
-
-clear_rx_queue:
-	netdev_err(dev, "onic_init_rx_queue %d failed, err = %d", qid, rv);
-	onic_clear_rx_queue(priv, qid);
-	return rv;
-}
-
+ 
 static int onic_init_tx_resource(struct onic_private *priv)
 {
 	struct net_device *dev = priv->netdev;
@@ -1405,3 +1189,498 @@ int onic_xdp_xmit(struct net_device *dev, int n, struct xdp_frame **frames, u32 
 	return n - drops;
 }
 
+static int onic_rx_zc_poll(struct napi_struct *napi, int budget)
+{
+	struct onic_rx_queue *q = container_of(napi, struct onic_rx_queue, napi);
+	struct onic_private *priv = netdev_priv(q->netdev);
+	u16 qid = q->qid;
+	struct onic_ring *desc_ring = &q->desc_ring;
+	struct onic_ring *cmpl_ring = &q->cmpl_ring;
+	struct qdma_c2h_cmpl cmpl;
+	struct qdma_c2h_cmpl_stat cmpl_stat;
+	u8 *cmpl_ptr;
+	u8 *cmpl_stat_ptr;
+	u32 color_stat;
+	int work = 0;
+	int i, rv, err;
+	bool flipped = 0;
+	bool alloc_err_xsk = false;
+	bool tx_wake;
+
+	unsigned int xdp_xmit = 0;
+	struct rtnl_link_stats64 *pcpu_stats_pointer;
+	pcpu_stats_pointer = this_cpu_ptr(priv->netdev_stats);
+
+	for (i = 0; i < priv->num_tx_queues; i++)
+	{
+		onic_tx_clean(priv->tx_queue[i]);
+		if (qid == i && test_bit(qid, priv->af_xdp_zc_qps) && q->xsk_pool)
+		{
+			// onic_update_tx_need_wakeup(priv->tx_queue[qid]);
+			tx_wake = onic_xsk_xmit(priv, priv->tx_queue[qid]);
+			onic_update_tx_need_wakeup(priv->tx_queue[qid], tx_wake);
+		}
+	}
+
+	cmpl_ptr = cmpl_ring->desc + QDMA_C2H_CMPL_SIZE * cmpl_ring->next_to_clean;
+	cmpl_stat_ptr = cmpl_ring->desc + QDMA_C2H_CMPL_SIZE * (cmpl_ring->count - 1);
+
+	qdma_unpack_c2h_cmpl(&cmpl, cmpl_ptr);
+	qdma_unpack_c2h_cmpl_stat(&cmpl_stat, cmpl_stat_ptr);
+
+	color_stat = cmpl_stat.color;
+
+	while ((cmpl_ring->next_to_clean != cmpl_stat.pidx))
+	{
+
+		struct sk_buff *skb;
+		int xdp_result;
+
+		int len = cmpl.pkt_len;
+
+		struct xdp_buff *xdp_buff = q->xdps[desc_ring->next_to_clean];
+
+		xdp_buff->data_end = xdp_buff->data + len;
+		xsk_buff_dma_sync_for_cpu(xdp_buff, q->xsk_pool);
+		xdp_result = onic_run_xdp_zc(q, xdp_buff);
+		xdp_xmit |= xdp_result;
+		if (xdp_result == ONIC_XDP_CONSUMED)
+		{
+			xsk_buff_free(xdp_buff);
+		}
+		else if (xdp_result == ONIC_XDP_PASS)
+		{
+			skb = onic_xsk_construct_skb(napi, xdp_buff);
+			if (skb)
+			{
+				skb_record_rx_queue(skb, q->qid);
+				skb->protocol = eth_type_trans(skb, q->netdev);
+				err = napi_gro_receive(napi, skb);
+				if (err < 0)
+				{
+					netdev_err(q->netdev, "napi_gro_receive, err = %d", rv);
+				}
+			}
+			xsk_buff_free(xdp_buff);
+		}
+
+		pcpu_stats_pointer->rx_packets++;
+		pcpu_stats_pointer->rx_bytes += len;
+		onic_ring_increment_tail(desc_ring);
+
+		if (onic_rx_high_watermark(q))
+		{
+			netdev_dbg(q->netdev, "High watermark: h = %d, t = %d",
+					   desc_ring->next_to_use, desc_ring->next_to_clean);
+			alloc_err_xsk = onic_rx_refill(q);
+		}
+
+		onic_ring_increment_tail(cmpl_ring);
+
+		if (cmpl.color != cmpl_ring->color)
+		{
+			cmpl_ring->color = (cmpl_ring->color == 0) ? 1 : 0;
+			flipped = 1;
+		}
+		cmpl_ptr =
+			cmpl_ring->desc + (QDMA_C2H_CMPL_SIZE * cmpl_ring->next_to_clean);
+
+		if ((++work) >= budget)
+		{
+			if (xdp_xmit & ONIC_XDP_REDIR)
+				xdp_do_flush();
+
+			// napi will be rescheduled. Keep irq disabled.
+			return work;
+		}
+
+		// read next completion descriptor
+		qdma_unpack_c2h_cmpl(&cmpl, cmpl_ptr);
+	}
+
+	// If here it means that the budget is not exhausted
+
+	if (onic_rx_high_watermark(q))
+	{
+		netdev_dbg(q->netdev, "High watermark: h = %d, t = %d",
+				   desc_ring->next_to_use, desc_ring->next_to_clean);
+		alloc_err_xsk = onic_rx_refill(q);
+	}
+	if (xdp_xmit & ONIC_XDP_REDIR)
+		xdp_do_flush();
+
+	if (!xsk_uses_need_wakeup(q->xsk_pool) && alloc_err_xsk)
+	{
+		return budget;
+	}
+
+	return work;
+}
+
+static int onic_clean_rx_poll(struct napi_struct *napi, int budget)
+{
+	struct onic_rx_queue *q = container_of(napi, struct onic_rx_queue, napi);
+	struct onic_private *priv = netdev_priv(q->netdev);
+	u16 qid = q->qid;
+	struct onic_ring *desc_ring = &q->desc_ring;
+	struct onic_ring *cmpl_ring = &q->cmpl_ring;
+	struct qdma_c2h_cmpl cmpl;
+	struct qdma_c2h_cmpl_stat cmpl_stat;
+	u8 *cmpl_ptr;
+	u8 *cmpl_stat_ptr;
+	u32 color_stat;
+	int work = 0;
+	int i, rv;
+	bool debug = 0;
+	void *res;
+	bool alloc_err_xsk = false;
+
+	struct xdp_buff xdp;
+	unsigned int xdp_xmit = 0;
+	struct rtnl_link_stats64 *pcpu_stats_pointer;
+	pcpu_stats_pointer = this_cpu_ptr(priv->netdev_stats);
+
+	if (debug)
+		netdev_info(q->netdev, "%s qid %d", __func__, qid);
+
+	for (i = 0; i < priv->num_tx_queues; i++)
+	{
+		onic_tx_clean(priv->tx_queue[i]);
+	}
+
+	cmpl_ptr = cmpl_ring->desc + QDMA_C2H_CMPL_SIZE * cmpl_ring->next_to_clean;
+	cmpl_stat_ptr = cmpl_ring->desc + QDMA_C2H_CMPL_SIZE * (cmpl_ring->count - 1);
+
+	qdma_unpack_c2h_cmpl(&cmpl, cmpl_ptr);
+	qdma_unpack_c2h_cmpl_stat(&cmpl_stat, cmpl_stat_ptr);
+
+	color_stat = cmpl_stat.color;
+
+	if (cmpl.err == 1)
+	{
+		if (debug)
+			netdev_info(q->netdev, "completion error detected in cmpl entry!");
+		// todo: need to handle the error ...
+		onic_qdma_clear_error_interrupt(priv->hw.qdma);
+	}
+
+	while ((cmpl_ring->next_to_clean != cmpl_stat.pidx))
+	{
+		struct sk_buff *skb;
+		int len = cmpl.pkt_len;
+		struct onic_rx_buffer *buf = &q->buffer[desc_ring->next_to_clean];
+		
+		xdp_init_buff(&xdp, PAGE_SIZE, &q->xdp_rxq);
+
+		dma_sync_single_for_cpu(&priv->pdev->dev,
+								page_pool_get_dma_addr(buf->pg) + buf->offset,
+								len, DMA_FROM_DEVICE);
+
+		xdp_prepare_buff(&xdp, page_address(buf->pg), buf->offset, len, false);
+		res = onic_run_xdp(q, &xdp);
+		if (IS_ERR(res))
+		{
+			unsigned int xdp_res = -PTR_ERR(res);
+
+			if (xdp_res & (ONIC_XDP_TX | ONIC_XDP_REDIR))
+			{
+				xdp_xmit |= xdp_res;
+			}
+
+			// Allocate skb only if we are continuing to process the packet
+			if (xdp_res & ONIC_XDP_PASS)
+			{
+
+				// allocate a new skb structure around the data
+				skb = napi_build_skb(xdp.data_hard_start, PAGE_SIZE);
+
+				if (!skb)
+				{
+					rv = -ENOMEM;
+					break;
+				}
+
+				// mark the skb for page_pool recycling
+				skb_mark_for_recycle(skb);
+				// reserve space in the skb for the data for the xdp headroom
+				skb_reserve(skb, xdp.data - xdp.data_hard_start);
+				// set the data pointer
+				skb_put(skb, xdp.data_end - xdp.data);
+
+				skb->protocol = eth_type_trans(skb, q->netdev);
+				skb->ip_summed = CHECKSUM_NONE;
+				skb_record_rx_queue(skb, qid);
+				rv = napi_gro_receive(napi, skb);
+				if (rv < 0)
+				{
+					netdev_err(q->netdev, "napi_gro_receive, err = %d", rv);
+					break;
+				}
+			}
+		}
+	
+		pcpu_stats_pointer->rx_packets++;
+		pcpu_stats_pointer->rx_bytes += len;
+	
+		onic_ring_increment_tail(desc_ring);
+
+		if (onic_rx_high_watermark(q)) {
+			netdev_dbg(q->netdev, "High watermark: h = %d, t = %d",
+					   desc_ring->next_to_use, desc_ring->next_to_clean);
+			alloc_err_xsk = onic_rx_refill(q);
+		  }
+		  onic_ring_increment_tail(cmpl_ring);
+		  cmpl_ptr =
+		  cmpl_ring->desc + (QDMA_C2H_CMPL_SIZE * cmpl_ring->next_to_clean);
+
+		  if ((++work) >= budget) {
+			if (xdp_xmit & ONIC_XDP_REDIR)
+			  xdp_do_flush();
+			if (debug)
+			  netdev_info(q->netdev, "watchdog work %u, budget %u", work, budget);
+			return work;
+		  }
+
+		  qdma_unpack_c2h_cmpl(&cmpl, cmpl_ptr);
+	}
+
+	if (xdp_xmit & ONIC_XDP_REDIR)
+    xdp_do_flush();
+
+	return work;
+}
+
+static int onic_rx_poll(struct napi_struct *napi, int budget)
+{
+	struct onic_rx_queue *q = container_of(napi, struct onic_rx_queue, napi);
+	struct onic_private *priv = netdev_priv(q->netdev);
+	bool irq_rearm = 0;
+	u16 qid = q->qid;
+	int work_done;
+
+	//TODO:  extract here the polling of tx completion.
+
+	if (q->xsk_pool && test_bit(qid, priv->af_xdp_zc_qps))
+	{
+		work_done = onic_rx_zc_poll(napi, budget);
+	}
+	else
+	{
+		work_done = onic_clean_rx_poll(napi, budget);
+	}
+	if (work_done < budget)
+	{
+		irq_rearm = napi_complete_done(napi, work_done);
+	}
+
+	onic_set_completion_tail(priv->hw.qdma, qid, q->cmpl_ring.next_to_clean,
+							 irq_rearm);
+
+
+	return work_done;
+}
+
+
+
+int onic_init_rx_queue(struct onic_private *priv, u16 qid)
+{
+	// TODO: make these configurable via ethtool
+	const u8 bufsz_idx = 8;
+	const u8 desc_rngcnt_idx = 8;
+	//const u8 cmpl_rngcnt_idx = 15;
+	const u8 cmpl_rngcnt_idx = 8;
+	struct net_device *dev = priv->netdev;
+	struct onic_rx_queue *q;
+	struct onic_ring *ring;
+	struct onic_qdma_c2h_param param;
+	u16 vid;
+	u32 size, real_count;
+	int i, rv;
+	bool debug = 1;
+	int err;
+	int buffers_allocated = 0;
+	
+	if (priv->rx_queue[qid]) {
+		if (debug)
+			netdev_info(dev, "Re-initializing RX queue %d", qid);
+		onic_clear_rx_queue(priv, qid);
+	}
+
+	q = kzalloc(sizeof(struct onic_rx_queue), GFP_KERNEL);
+	if (!q)
+		return -ENOMEM;
+
+	/* evenly assign to RX queues available vectors */
+	vid = qid % priv->num_q_vectors;
+
+	q->netdev = dev;
+	q->vector = priv->q_vector[vid];
+	q->qid = qid;
+
+	q->xdp_prog = priv->xdp_prog;
+
+	/* allocate DMA memory for RX descriptor ring */
+	ring = &q->desc_ring;
+	ring->count = onic_ring_count(desc_rngcnt_idx);
+	real_count = ring->count - 1;
+
+	size = QDMA_C2H_ST_DESC_SIZE * real_count + QDMA_WB_STAT_SIZE;
+	size = ALIGN(size, PAGE_SIZE);
+	ring->desc = dma_alloc_coherent(&priv->pdev->dev, size, &ring->dma_addr,
+					GFP_KERNEL);
+	if (!ring->desc) {
+		rv = -ENOMEM;
+		goto clear_rx_queue;
+	}
+	memset(ring->desc, 0, size);
+	ring->wb = ring->desc + QDMA_C2H_ST_DESC_SIZE * real_count;
+	ring->next_to_use = 0;
+	ring->next_to_clean = 0;
+	ring->color = 0;
+
+	if (test_bit(qid, priv->af_xdp_zc_qps)) {
+		q->xsk_pool = xsk_get_pool_from_qid(dev, qid);
+		if (!q->xsk_pool) {
+			rv = -ENOMEM;
+			netdev_err(dev, "fatal error: xsk_pool is NULL at queue %d but the state bit is set", qid);
+			goto clear_rx_queue;
+		}
+
+
+		err = xdp_rxq_info_reg(&q->xdp_rxq, priv->netdev, q->qid, 0);
+		if (err)
+			goto clear_rx_queue;
+
+		err = xdp_rxq_info_reg_mem_model(&q->xdp_rxq, MEM_TYPE_XSK_BUFF_POOL,
+						NULL);
+		if (err)
+			goto clear_rx_queue;
+		
+		xsk_pool_set_rxq_info(q->xsk_pool, &q->xdp_rxq);
+
+		// af_xdp zero copy allocator stuff
+		q->xdps = kcalloc(real_count, sizeof(struct xdp_buff *), GFP_KERNEL);
+		if (!q->xdps) {
+			rv = -ENOMEM;
+			goto clear_rx_queue;
+		}
+
+		for (i = 0; i < ONIC_RX_DESC_STEP; ++i) {
+			q->xdps[i] = xsk_buff_alloc(q->xsk_pool);
+			if (!q->xdps[i]) {
+				netdev_err(dev, "xsk_buff_alloc failed at %d", i);
+				break;
+			}
+		}
+
+		buffers_allocated = i;
+
+		for (i=0; i < buffers_allocated; ++i) {
+
+			u8 *desc_ptr = ring->desc + QDMA_C2H_ST_DESC_SIZE * i;
+			struct qdma_c2h_st_desc desc;
+			desc.dst_addr = xsk_buff_xdp_get_dma(q->xdps[i]);
+			qdma_pack_c2h_st_desc(desc_ptr, &desc);
+
+		}
+	} else {
+		// normal page pool stuff
+		/* initialize RX buffers */
+		q->buffer =
+			kcalloc(real_count, sizeof(struct onic_rx_buffer), GFP_KERNEL);
+		if (!q->buffer) {
+			rv = -ENOMEM;
+			goto clear_rx_queue;
+		}
+
+		rv = onic_create_page_pool(priv, q, real_count);
+		if (rv < 0)
+			goto clear_rx_queue;
+		
+
+		for (i = 0; i < ONIC_RX_DESC_STEP; ++i) {
+			struct page *pg = page_pool_dev_alloc_pages(q->page_pool);
+
+			if (!pg) {
+				netdev_err(dev, "page_pool_dev_alloc_pages failed at %d", i);
+				break;
+			}
+
+			q->buffer[i].pg = pg;
+			q->buffer[i].offset = XDP_PACKET_HEADROOM;
+		}
+
+		buffers_allocated = i;
+
+		/* map pages and initialize descriptors */
+		for (i = 0; i < buffers_allocated ; ++i) {
+			u8 *desc_ptr = ring->desc + QDMA_C2H_ST_DESC_SIZE * i;
+			struct qdma_c2h_st_desc desc;
+			struct page *pg = q->buffer[i].pg;
+			unsigned int offset = q->buffer[i].offset;
+
+			desc.dst_addr = page_pool_get_dma_addr(pg) + offset;
+			qdma_pack_c2h_st_desc(desc_ptr, &desc);
+		}
+
+	}
+
+
+	/* allocate DMA memory for completion ring */
+	ring = &q->cmpl_ring;
+	ring->count = onic_ring_count(cmpl_rngcnt_idx);
+	real_count = ring->count - 1;
+
+	size = QDMA_C2H_CMPL_SIZE * real_count + QDMA_C2H_CMPL_STAT_SIZE;
+	size = ALIGN(size, PAGE_SIZE);
+	ring->desc = dma_alloc_coherent(&priv->pdev->dev, size, &ring->dma_addr,
+					GFP_KERNEL);
+	if (!ring->desc) {
+		rv = -ENOMEM;
+		goto clear_rx_queue;
+	}
+	memset(ring->desc, 0, size);
+	ring->wb = ring->desc + QDMA_C2H_CMPL_SIZE * real_count;
+	ring->next_to_use = 0;
+	ring->next_to_clean = 0;
+	ring->color = 1;
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,1,0)
+	netif_napi_add(dev, &q->napi, onic_rx_poll);
+#else
+	netif_napi_add(dev, &q->napi, onic_rx_poll, 64);
+#endif
+	napi_enable(&q->napi);
+
+	/* initialize QDMA C2H queue */
+	param.bufsz_idx = bufsz_idx;
+	param.desc_rngcnt_idx = desc_rngcnt_idx;
+	param.cmpl_rngcnt_idx = cmpl_rngcnt_idx;
+	param.cmpl_desc_sz = 0;
+	param.desc_dma_addr = q->desc_ring.dma_addr;
+	param.cmpl_dma_addr = q->cmpl_ring.dma_addr;
+	param.vid = vid;
+	if (debug)
+		netdev_info(
+			dev,
+			"bufsz_idx %u, desc_rngcnt_idx %u, cmpl_rngcnt_idx %u, desc_dma_addr 0x%llx, cmpl_dma_addr 0x%llx, vid %d",
+			bufsz_idx, desc_rngcnt_idx, cmpl_rngcnt_idx,
+			q->desc_ring.dma_addr, q->cmpl_ring.dma_addr, vid);
+
+	rv = onic_qdma_init_rx_queue(priv->hw.qdma, qid, &param);
+	if (rv < 0)
+		goto clear_rx_queue;
+
+	/* fill RX descriptor ring with a few descriptors */
+	q->desc_ring.next_to_use =  min(buffers_allocated , ONIC_RX_DESC_STEP);
+	onic_set_rx_head(priv->hw.qdma, qid, q->desc_ring.next_to_use);
+	onic_set_completion_tail(priv->hw.qdma, qid, 0, 1);
+
+	priv->rx_queue[qid] = q;
+	return 0;
+
+clear_rx_queue:
+	netdev_err(dev, "onic_init_rx_queue %d failed, err = %d", qid, rv);
+	onic_clear_rx_queue(priv, qid);
+	return rv;
+}

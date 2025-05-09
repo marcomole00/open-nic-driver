@@ -72,6 +72,7 @@ int onic_run_xdp_zc(struct onic_rx_queue *rx_queue, struct xdp_buff *xdp_buff)
 		// this would be a catastrophic error as the zero copy path is allowed only when a xdp program is loaded
 		// TODO : log this error
 		netdev_err(rx_queue->netdev, "XDP program not loaded for AF_XDP_ZC\n");
+		return ONIC_XDP_CONSUMED;
 	}
 
 	act = bpf_prog_run_xdp(xdp_prog, xdp_buff);
