@@ -129,79 +129,167 @@ static void onic_update_tx_need_wakeup(struct onic_tx_queue *q, bool wake_up){
 	
 }
 
-static bool onic_rx_high_watermark(struct onic_rx_queue *q)
+// static bool onic_rx_high_watermark(struct onic_rx_queue *q)
+// {
+// 	struct onic_ring *ring = &q->desc_ring;
+// 	int unused;
+
+// 	unused = ring->next_to_use - ring->next_to_clean;
+// 	if (ring->next_to_use < ring->next_to_clean)
+// 		unused += onic_ring_get_real_count(ring);
+
+// 	return (unused < (ONIC_RX_DESC_STEP / 2));
+// }
+
+
+// static int onic_unused_desc(struct onic_rx_queue *q)
+// {
+// 	struct onic_ring *ring = &q->desc_ring;
+// 	int unused;
+
+// 	unused = ring->next_to_clean - ring->next_to_use;
+// 	if (ring->next_to_use < ring->next_to_clean)
+// 		unused += onic_ring_get_real_count(ring);
+
+// 	return unused;
+// }
+
+
+
+static int onic_rx_pp_refill(struct onic_rx_queue *q, int budget)
 {
-	struct onic_ring *ring = &q->desc_ring;
-	int unused;
 
-	unused = ring->next_to_use - ring->next_to_clean;
-	if (ring->next_to_use < ring->next_to_clean)
-		unused += onic_ring_get_real_count(ring);
+	struct onic_private *priv = netdev_priv(q->netdev);
+	struct onic_ring *desc_ring = &q->desc_ring;
+	struct qdma_c2h_st_desc desc;
 
-	return (unused < (ONIC_RX_DESC_STEP / 2));
-}
-
-static bool onic_rx_refill(struct onic_rx_queue *q) {
-  struct onic_private *priv = netdev_priv(q->netdev);
-  struct onic_ring *desc_ring = &q->desc_ring;
-  struct qdma_c2h_st_desc desc;
-  int i = 0;
-  int buffers_allocated = 0;
-  bool wake_up = false;
-
-  // netdev_info(priv->netdev, "%s @ q#%d  ntc %d ntu %d", __func__,
-              // q->qid,desc_ring->next_to_clean, desc_ring->next_to_use);
-  // the upper bound should be min(ONIX_RX_DESC_STEP, NTU-NTC)?
-  //TODO: tweak this this parameter to see if there are differences
-  for (i = 0; i < ONIC_RX_DESC_STEP; i++)
-
-  {
+	int i = 0;
+	for (i = 0; i < budget; i++) {
 		u8 *desc_ptr =
 		    desc_ring->desc + QDMA_C2H_ST_DESC_SIZE * desc_ring->next_to_use;
-    if (q->xsk_pool) {
-      struct xdp_buff *xdp_buff;
-      xdp_buff = xsk_buff_alloc(q->xsk_pool);
-      if (!xdp_buff) {
-        netdev_err(q->netdev, "xsk_buff_alloc failed\n");
-        wake_up = true;
-        break;
-      }
-      buffers_allocated++;
-      q->xdps[desc_ring->next_to_use] = xdp_buff;
-      desc.dst_addr = xsk_buff_xdp_get_dma(xdp_buff);
-    } else {
-      struct page *pg;
-      pg = page_pool_dev_alloc_pages(q->page_pool);
-      if (!pg) {
-        netdev_err(q->netdev, "page_pool_dev_alloc_pages failed\n");
-        break;
-      }
+		struct page *pg;
 
-      buffers_allocated++;
-      q->buffer[desc_ring->next_to_use].pg = pg;
-      q->buffer[desc_ring->next_to_use].offset = XDP_PACKET_HEADROOM;
+		pg = page_pool_dev_alloc_pages(q->page_pool);
+		if (!pg) {
+			netdev_err(priv->netdev, "page_pool_dev_alloc_pages failed\n");
+			break;
+		}
 
-      desc.dst_addr = page_pool_get_dma_addr(pg) + XDP_PACKET_HEADROOM;
-    }
+		q->buffer[desc_ring->next_to_use].pg = pg;
+		q->buffer[desc_ring->next_to_use].offset = XDP_PACKET_HEADROOM;
 
-    qdma_pack_c2h_st_desc(desc_ptr, &desc);
-    onic_ring_increment_head(desc_ring);
-  }
+		desc.dst_addr = page_pool_get_dma_addr(pg) + XDP_PACKET_HEADROOM;
+
+		qdma_pack_c2h_st_desc(desc_ptr, &desc);
+		onic_ring_increment_head(desc_ring);
+	}
 
 	// netdev_info(priv->netdev, "%s: allocated %d buffers, ntc %d ntu %d", __func__, buffers_allocated, desc_ring->next_to_clean, desc_ring->next_to_use);
-  onic_set_rx_head(priv->hw.qdma, q->qid, desc_ring->next_to_use);
+	// onic_set_rx_head(priv->hw.qdma, q->qid, desc_ring->next_to_use);
+	// head will be moved at the end of the napi poll
+	return i;
 
-  if (q->xsk_pool) {
-    if (!xsk_uses_need_wakeup(q->xsk_pool))
-      return wake_up; // signal to the outer function to not call
-                      // napi_complete_done, because we have to reschedule
-    if (wake_up)
-      xsk_set_rx_need_wakeup(q->xsk_pool);
-    else
-      xsk_clear_rx_need_wakeup(q->xsk_pool);
-  }
-  return false;
-  }
+}
+
+static int onic_rx_zc_refill(struct onic_rx_queue *q, int budget)
+{
+
+	struct onic_ring *desc_ring = &q->desc_ring;
+	struct qdma_c2h_st_desc desc;
+	int i = 0;
+	bool wake_up = false;
+
+	
+	for (i = 0; i < budget; i++) {
+		u8 *desc_ptr =
+		    desc_ring->desc + QDMA_C2H_ST_DESC_SIZE * desc_ring->next_to_use;
+		struct xdp_buff *xdp_buff;
+		xdp_buff = xsk_buff_alloc(q->xsk_pool);
+		if (!xdp_buff) {
+			netdev_err(q->netdev, "xsk_buff_alloc failed\n");
+			wake_up = true;
+			break;
+		}
+		q->xdps[desc_ring->next_to_use] = xdp_buff;
+		desc.dst_addr = xsk_buff_xdp_get_dma(xdp_buff);
+
+		qdma_pack_c2h_st_desc(desc_ptr, &desc);
+		onic_ring_increment_head(desc_ring);
+	}
+
+	// netdev_info(priv->netdev, "%s: allocated %d buffers, ntc %d ntu %d", __func__, buffers_allocated, desc_ring->next_to_clean, desc_ring->next_to_use);
+	// onic_set_rx_head(priv->hw.qdma, q->qid, desc_ring->next_to_use);
+	if (likely(q->xsk_pool) && xsk_uses_need_wakeup(q->xsk_pool)) {
+		if (wake_up)
+			xsk_set_rx_need_wakeup(q->xsk_pool);
+		else
+			xsk_clear_rx_need_wakeup(q->xsk_pool);
+	}
+
+	return i;
+}
+
+// static bool onic_rx_refill(struct onic_rx_queue *q) {
+//   struct onic_private *priv = netdev_priv(q->netdev);
+//   struct onic_ring *desc_ring = &q->desc_ring;
+//   struct qdma_c2h_st_desc desc;
+//   int i = 0;
+//   int buffers_allocated = 0;
+//   bool wake_up = false;
+
+//   // netdev_info(priv->netdev, "%s @ q#%d  ntc %d ntu %d", __func__,
+//               // q->qid,desc_ring->next_to_clean, desc_ring->next_to_use);
+//   // the upper bound should be min(ONIX_RX_DESC_STEP, NTU-NTC)?
+//   //TODO: tweak this this parameter to see if there are differences
+//   for (i = 0; i < ONIC_RX_DESC_STEP; i++)
+
+//   {
+// 		u8 *desc_ptr =
+// 		    desc_ring->desc + QDMA_C2H_ST_DESC_SIZE * desc_ring->next_to_use;
+//     if (q->xsk_pool) {
+//       struct xdp_buff *xdp_buff;
+//       xdp_buff = xsk_buff_alloc(q->xsk_pool);
+//       if (!xdp_buff) {
+//         netdev_err(q->netdev, "xsk_buff_alloc failed\n");
+//         wake_up = true;
+//         break;
+//       }
+//       buffers_allocated++;
+//       q->xdps[desc_ring->next_to_use] = xdp_buff;
+//       desc.dst_addr = xsk_buff_xdp_get_dma(xdp_buff);
+//     } else {
+//       struct page *pg;
+//       pg = page_pool_dev_alloc_pages(q->page_pool);
+//       if (!pg) {
+//         netdev_err(q->netdev, "page_pool_dev_alloc_pages failed\n");
+//         break;
+//       }
+
+//       buffers_allocated++;
+//       q->buffer[desc_ring->next_to_use].pg = pg;
+//       q->buffer[desc_ring->next_to_use].offset = XDP_PACKET_HEADROOM;
+
+//       desc.dst_addr = page_pool_get_dma_addr(pg) + XDP_PACKET_HEADROOM;
+//     }
+
+//     qdma_pack_c2h_st_desc(desc_ptr, &desc);
+//     onic_ring_increment_head(desc_ring);
+//   }
+
+// 	// netdev_info(priv->netdev, "%s: allocated %d buffers, ntc %d ntu %d", __func__, buffers_allocated, desc_ring->next_to_clean, desc_ring->next_to_use);
+//   onic_set_rx_head(priv->hw.qdma, q->qid, desc_ring->next_to_use);
+
+//   if (q->xsk_pool) {
+//     if (!xsk_uses_need_wakeup(q->xsk_pool))
+//       return wake_up; // signal to the outer function to not call
+//                       // napi_complete_done, because we have to reschedule
+//     if (wake_up)
+//       xsk_set_rx_need_wakeup(q->xsk_pool);
+//     else
+//       xsk_clear_rx_need_wakeup(q->xsk_pool);
+//   }
+//   return false;
+//   }
 
 static struct onic_tx_queue *onic_xdp_tx_queue_mapping(struct onic_private *priv)
 {
@@ -1268,13 +1356,6 @@ static int onic_rx_zc_poll(struct napi_struct *napi, int budget)
 		pcpu_stats_pointer->rx_bytes += len;
 		onic_ring_increment_tail(desc_ring);
 
-		if (onic_rx_high_watermark(q))
-		{
-			netdev_dbg(q->netdev, "High watermark: h = %d, t = %d",
-					   desc_ring->next_to_use, desc_ring->next_to_clean);
-			alloc_err_xsk = onic_rx_refill(q);
-		}
-
 		onic_ring_increment_tail(cmpl_ring);
 
 		if (cmpl.color != cmpl_ring->color)
@@ -1287,25 +1368,25 @@ static int onic_rx_zc_poll(struct napi_struct *napi, int budget)
 
 		if ((++work) >= budget)
 		{
-			if (xdp_xmit & ONIC_XDP_REDIR)
-				xdp_do_flush();
+			goto out_of_budget;
+			// if (xdp_xmit & ONIC_XDP_REDIR)
+			// 	xdp_do_flush();
 
-			// napi will be rescheduled. Keep irq disabled.
-			return work;
+			// // napi will be rescheduled. Keep irq disabled.
+			// return work;
 		}
 
 		// read next completion descriptor
 		qdma_unpack_c2h_cmpl(&cmpl, cmpl_ptr);
 	}
 
-	// If here it means that the budget is not exhausted
-
-	if (onic_rx_high_watermark(q))
+out_of_budget:	
+	if (onic_rx_zc_refill(q,work) != work)
 	{
-		netdev_dbg(q->netdev, "High watermark: h = %d, t = %d",
-				   desc_ring->next_to_use, desc_ring->next_to_clean);
-		alloc_err_xsk = onic_rx_refill(q);
+		alloc_err_xsk = true;
 	}
+
+
 	if (xdp_xmit & ONIC_XDP_REDIR)
 		xdp_do_flush();
 
@@ -1331,9 +1412,8 @@ static int onic_clean_rx_poll(struct napi_struct *napi, int budget)
 	u32 color_stat;
 	int work = 0;
 	int i, rv;
-	bool debug = 0;
+	bool debug = 1;
 	void *res;
-	bool alloc_err_xsk = false;
 
 	struct xdp_buff xdp;
 	unsigned int xdp_xmit = 0;
@@ -1424,26 +1504,21 @@ static int onic_clean_rx_poll(struct napi_struct *napi, int budget)
 	
 		onic_ring_increment_tail(desc_ring);
 
-		if (onic_rx_high_watermark(q)) {
-			netdev_dbg(q->netdev, "High watermark: h = %d, t = %d",
-					   desc_ring->next_to_use, desc_ring->next_to_clean);
-			alloc_err_xsk = onic_rx_refill(q);
-		  }
-		  onic_ring_increment_tail(cmpl_ring);
-		  cmpl_ptr =
-		  cmpl_ring->desc + (QDMA_C2H_CMPL_SIZE * cmpl_ring->next_to_clean);
+
+		onic_ring_increment_tail(cmpl_ring);
+		cmpl_ptr = cmpl_ring->desc + (QDMA_C2H_CMPL_SIZE * cmpl_ring->next_to_clean);
 
 		  if ((++work) >= budget) {
-			if (xdp_xmit & ONIC_XDP_REDIR)
-			  xdp_do_flush();
-			if (debug)
-			  netdev_info(q->netdev, "watchdog work %u, budget %u", work, budget);
-			return work;
+			goto out_of_budget;
 		  }
 
 		  qdma_unpack_c2h_cmpl(&cmpl, cmpl_ptr);
 	}
 
+	
+out_of_budget:	
+	onic_rx_pp_refill(q, work);
+	
 	if (xdp_xmit & ONIC_XDP_REDIR)
     xdp_do_flush();
 
@@ -1475,6 +1550,7 @@ static int onic_rx_poll(struct napi_struct *napi, int budget)
 
 	onic_set_completion_tail(priv->hw.qdma, qid, q->cmpl_ring.next_to_clean,
 							 irq_rearm);
+	onic_set_rx_head(priv->hw.qdma, qid, q->desc_ring.next_to_use);
 
 
 	return work_done;
@@ -1565,15 +1641,14 @@ int onic_init_rx_queue(struct onic_private *priv, u16 qid)
 			goto clear_rx_queue;
 		}
 
-		for (i = 0; i < ONIC_RX_DESC_STEP; ++i) {
+		for (i = 0; i < real_count; ++i) {
 			q->xdps[i] = xsk_buff_alloc(q->xsk_pool);
 			if (!q->xdps[i]) {
 				netdev_err(dev, "xsk_buff_alloc failed at %d", i);
 				break;
 			}
+			buffers_allocated++;
 		}
-
-		buffers_allocated = i;
 
 		for (i=0; i < buffers_allocated; ++i) {
 
@@ -1598,7 +1673,7 @@ int onic_init_rx_queue(struct onic_private *priv, u16 qid)
 			goto clear_rx_queue;
 		
 
-		for (i = 0; i < ONIC_RX_DESC_STEP; ++i) {
+		for (i = 0; i < real_count; ++i) {
 			struct page *pg = page_pool_dev_alloc_pages(q->page_pool);
 
 			if (!pg) {
@@ -1608,9 +1683,10 @@ int onic_init_rx_queue(struct onic_private *priv, u16 qid)
 
 			q->buffer[i].pg = pg;
 			q->buffer[i].offset = XDP_PACKET_HEADROOM;
+			buffers_allocated++;
 		}
 
-		buffers_allocated = i;
+		
 
 		/* map pages and initialize descriptors */
 		for (i = 0; i < buffers_allocated ; ++i) {
@@ -1672,7 +1748,7 @@ int onic_init_rx_queue(struct onic_private *priv, u16 qid)
 		goto clear_rx_queue;
 
 	/* fill RX descriptor ring with a few descriptors */
-	q->desc_ring.next_to_use =  min(buffers_allocated , ONIC_RX_DESC_STEP);
+	q->desc_ring.next_to_use =  buffers_allocated - 1;	
 	onic_set_rx_head(priv->hw.qdma, qid, q->desc_ring.next_to_use);
 	onic_set_completion_tail(priv->hw.qdma, qid, 0, 1);
 

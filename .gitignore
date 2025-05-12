@@ -7,5 +7,5 @@
 modules.order
 Module.symvers
 compile_commands.json
-
+*.patch
 .vscode/
