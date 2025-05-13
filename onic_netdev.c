@@ -870,6 +870,7 @@ void onic_clear_rx_queue(struct onic_private *priv, u16 qid)
 	struct onic_rx_queue *q = priv->rx_queue[qid];
 	struct onic_ring *ring;
 	u32 size, real_count;
+	int i;
 	
 	if (!q)
 		return;
@@ -878,20 +879,6 @@ void onic_clear_rx_queue(struct onic_private *priv, u16 qid)
 
 	napi_disable(&q->napi);
 	netif_napi_del(&q->napi);
-
-	while (onic_ring_get_occupancy(&q->desc_ring) > 0) {
-		
-		if (q->page_pool){
-			struct page *pg = q->buffer[q->desc_ring.next_to_clean].pg;
-			page_pool_put_full_page(q->page_pool, pg, false);
-		} else if (q->xsk_pool) {
-			struct xdp_buff *xdp_buff = q->xdps[q->desc_ring.next_to_clean];
-			xsk_buff_free(xdp_buff);
-		} else {
-			netdev_err(priv->netdev, "unknown buffer type");
-		}
-		onic_ring_increment_tail(&q->desc_ring);
-	}
 	
 	ring = &q->desc_ring;
 	real_count = ring->count - 1;
@@ -899,6 +886,20 @@ void onic_clear_rx_queue(struct onic_private *priv, u16 qid)
 	size = ALIGN(size, PAGE_SIZE);
 	netdev_info(q->netdev, "Cleaning RTX desc_ring #%d ntc %d ntu %d distance=%d",q->qid, ring->next_to_clean, ring->next_to_use, onic_ring_get_occupancy(ring));
 
+	for(i = 0; i < real_count; ++i) {
+		
+		if (q->page_pool){
+			struct page *pg = q->buffer[i].pg;
+			if (pg) page_pool_put_full_page(q->page_pool, pg, false);
+		} else if (q->xsk_pool) {
+			struct xdp_buff *xdp_buff = q->xdps[i];
+			if (xdp_buff) xsk_buff_free(xdp_buff);
+		} else {
+			netdev_err(priv->netdev, "unknown buffer type");
+		}
+		
+	}
+	
 	if (ring->desc)
 		dma_free_coherent(&priv->pdev->dev, size, ring->desc,
 				  ring->dma_addr);
@@ -1354,6 +1355,10 @@ static int onic_rx_zc_poll(struct napi_struct *napi, int budget)
 
 		pcpu_stats_pointer->rx_packets++;
 		pcpu_stats_pointer->rx_bytes += len;
+
+		//NULL the pointer
+		q->xdps[desc_ring->next_to_clean] = NULL;
+
 		onic_ring_increment_tail(desc_ring);
 
 		onic_ring_increment_tail(cmpl_ring);
@@ -1501,7 +1506,10 @@ static int onic_clean_rx_poll(struct napi_struct *napi, int budget)
 	
 		pcpu_stats_pointer->rx_packets++;
 		pcpu_stats_pointer->rx_bytes += len;
-	
+		//NULL the pointer
+		buf->pg = NULL;
+		buf->offset = 0;
+			
 		onic_ring_increment_tail(desc_ring);
 
 
@@ -1726,7 +1734,6 @@ int onic_init_rx_queue(struct onic_private *priv, u16 qid)
 #else
 	netif_napi_add(dev, &q->napi, onic_rx_poll, 64);
 #endif
-	napi_enable(&q->napi);
 
 	/* initialize QDMA C2H queue */
 	param.bufsz_idx = bufsz_idx;
@@ -1748,11 +1755,12 @@ int onic_init_rx_queue(struct onic_private *priv, u16 qid)
 		goto clear_rx_queue;
 
 	/* fill RX descriptor ring with a few descriptors */
-	q->desc_ring.next_to_use =  buffers_allocated - 1;	
+	q->desc_ring.next_to_use =  buffers_allocated % (real_count);
 	onic_set_rx_head(priv->hw.qdma, qid, q->desc_ring.next_to_use);
 	onic_set_completion_tail(priv->hw.qdma, qid, 0, 1);
 
 	priv->rx_queue[qid] = q;
+	napi_enable(&q->napi);
 	return 0;
 
 clear_rx_queue:
